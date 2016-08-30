@@ -191,7 +191,7 @@ struct mptcp_tcp_sock {
 	u8	loc_id;
 	u8	rem_id;
 
-#define MPTCP_SCHED_SIZE 16
+#define MPTCP_SCHED_SIZE 128
 	u8	mptcp_sched[MPTCP_SCHED_SIZE] __aligned(8);
 
 	struct sk_buff  *shortcut_ofoqueue; /* Shortcut to the current modified
@@ -255,8 +255,11 @@ struct mptcp_sched_ops {
 						int *reinject,
 						struct sock **subsk,
 						unsigned int *limit);
+	bool			(*pre_schedule)(struct sock *meta_sk);
 	void			(*init)(struct sock *sk);
 	void			(*release)(struct sock *sk);
+	void			(*begin_schedule)(struct sock *sk);
+	void			(*set_state)(struct sock *sk, u8 new_state);
 
 	char			name[MPTCP_SCHED_NAME_MAX];
 	struct module		*owner;
@@ -298,6 +301,8 @@ struct mptcp_cb {
 	 * reinject-queue only the next and prev pointers are regularly
 	 * accessed. Thus, the whole data-path is on a single cache-line.
 	 */
+
+	u32	last_resched;	/* MPTCP-STTF: last re-scheduling */
 
 	u64	csum_cutoff_seq;
 	u64	infinite_rcv_seq;
@@ -662,6 +667,8 @@ extern int sysctl_mptcp_version;
 extern int sysctl_mptcp_checksum;
 extern int sysctl_mptcp_debug;
 extern int sysctl_mptcp_syn_retries;
+extern int sysctl_mptcp_exp_scheduling;
+extern int sysctl_mptcp_fast_connect;
 
 extern struct workqueue_struct *mptcp_wq;
 
@@ -888,6 +895,8 @@ void mptcp_reqsk_init(struct request_sock *req, struct sock *sk,
 int mptcp_conn_request(struct sock *sk, struct sk_buff *skb);
 void mptcp_enable_sock(struct sock *sk);
 void mptcp_disable_sock(struct sock *sk);
+void mptcp_set_logmask(struct sock *sk, int val);
+int mptcp_get_logmask(struct sock *sk);
 void mptcp_enable_static_key(void);
 void mptcp_disable_static_key(void);
 void mptcp_cookies_reqsk_init(struct request_sock *req,

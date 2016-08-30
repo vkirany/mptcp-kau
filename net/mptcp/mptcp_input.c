@@ -533,6 +533,7 @@ static int mptcp_prevalidate_skb(struct sock *sk, struct sk_buff *skb)
 {
 	struct tcp_sock *tp = tcp_sk(sk);
 	struct mptcp_cb *mpcb = tp->mpcb;
+	int mss_now = tcp_current_mss(sk);
 
 	/* If we are in infinite mode, the subflow-fin is in fact a data-fin. */
 	if (!skb->len && (TCP_SKB_CB(skb)->tcp_flags & TCPHDR_FIN) &&
@@ -580,9 +581,14 @@ static int mptcp_prevalidate_skb(struct sock *sk, struct sk_buff *skb)
 	 * condition.
 	 */
 	if (!tp->mptcp->fully_established) {
-		tp->mptcp->init_rcv_wnd -= skb->len;
-		if (tp->mptcp->init_rcv_wnd < 0)
-			mptcp_become_fully_estab(sk);
+		if (!sysctl_mptcp_fast_connect) {
+			tp->mptcp->init_rcv_wnd -= skb->len;
+			if (tp->mptcp->init_rcv_wnd < 0)
+				mptcp_become_fully_estab(sk);
+		} else {
+			if (skb->len >= mss_now)
+				mptcp_become_fully_estab(sk);
+		}
 	}
 
 	return 0;

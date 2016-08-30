@@ -223,6 +223,8 @@ struct tcp_sock {
 
 	u32	tsoffset;	/* timestamp offset */
 
+	u32	presched;	/* MPTCP-STTF pre-scheduling */
+
 	struct list_head tsq_node; /* anchor in tsq_tasklet.head list */
 	unsigned long	tsq_flags;
 
@@ -266,6 +268,11 @@ struct tcp_sock {
 	u32	rttvar_us;	/* smoothed mdev_max			*/
 	u32	rtt_seq;	/* sequence number to update rttvar	*/
 
+	u32	rtt_last;	/* MPTCP-STTF: last rtt sample */
+	u32	rtt_init;	/* MPTCP-STTF: first rtt sample */
+	u32	rtt_lastresched;/* MPTCP-STTF: last re-scheduling */
+	bool	mptcp_noresched;/* MPTCP-STTF: reschedule? */
+
 	u32	packets_out;	/* Packets which are "in flight"	*/
 	u32	retrans_out;	/* Retransmitted packets out		*/
 	u32	max_packets_out;  /* max packets_out in last window */
@@ -295,6 +302,8 @@ struct tcp_sock {
 	u32	prr_delivered;	/* Number of newly delivered packets to
 				 * receiver in Recovery. */
 	u32	prr_out;	/* Total number of pkts sent during Recovery. */
+
+	u32	tot_packets;	/* MPTCP-STTF: total packets sent */
 
  	u32	rcv_wnd;	/* Current receiver window		*/
 	u32	write_seq;	/* Tail(+1) of data held in tcp send buffer */
@@ -368,6 +377,8 @@ struct tcp_sock {
 	u32	mtu_info; /* We received an ICMP_FRAG_NEEDED / ICMPV6_PKT_TOOBIG
 			   * while socket was owned by user.
 			   */
+
+	int logmask;	/* MPTCP-STTF: log helper */
 
 #ifdef CONFIG_TCP_MD5SIG
 /* TCP AF-Specific parts; only used by MD5 Signature support so far */

@@ -289,6 +289,8 @@ int sysctl_tcp_min_tso_segs __read_mostly = 2;
 
 int sysctl_tcp_autocorking __read_mostly = 1;
 
+int sysctl_tcp_logmask __read_mostly;
+
 struct percpu_counter tcp_orphan_count;
 EXPORT_SYMBOL_GPL(tcp_orphan_count);
 
@@ -442,6 +444,8 @@ void tcp_init_sock(struct sock *sk)
 	sk->sk_rcvbuf = sysctl_tcp_rmem[1];
 
 	tp->ops = &tcp_specific;
+
+	tp->logmask = 0;
 
 	/* Initialize MPTCP-specific stuff and function-pointers */
 	mptcp_init_tcp_sock(sk);
@@ -2659,6 +2663,13 @@ static int do_tcp_setsockopt(struct sock *sk, int level,
 		sk->sk_write_space(sk);
 		break;
 #ifdef CONFIG_MPTCP
+	case MPTCP_LOGMASK:
+		if (val < 0)
+			err = -EINVAL;
+		else
+			mptcp_set_logmask(sk, val);
+		break;
+
 	case MPTCP_ENABLED:
 		if (mptcp_init_failed || !sysctl_mptcp_enabled ||
 		    sk->sk_state != TCP_CLOSE) {
@@ -2937,6 +2948,10 @@ static int do_tcp_getsockopt(struct sock *sk, int level,
 		val = tp->notsent_lowat;
 		break;
 #ifdef CONFIG_MPTCP
+	case MPTCP_LOGMASK:
+		val = mptcp_get_logmask(sk);
+		break;
+
 	case MPTCP_ENABLED:
 		val = sock_flag(sk, SOCK_MPTCP) ? 1 : 0;
 		break;

@@ -86,6 +86,7 @@ int sysctl_tcp_fack __read_mostly = 1;
 int sysctl_tcp_reordering __read_mostly = TCP_FASTRETRANS_THRESH;
 int sysctl_tcp_max_reordering __read_mostly = 300;
 EXPORT_SYMBOL(sysctl_tcp_reordering);
+int sysctl_tcp_resched __read_mostly;
 int sysctl_tcp_dsack __read_mostly = 1;
 int sysctl_tcp_app_win __read_mostly = 31;
 int sysctl_tcp_adv_win_scale __read_mostly = 1;
@@ -741,8 +742,10 @@ static void tcp_rtt_estimator(struct sock *sk, long mrtt_us)
 		tp->rttvar_us = max(tp->mdev_us, tcp_rto_min_us(sk));
 		tp->mdev_max_us = tp->rttvar_us;
 		tp->rtt_seq = tp->snd_nxt;
+		tp->rtt_init = max(1U, srtt);
 	}
 	tp->srtt_us = max(1U, srtt);
+	tp->rtt_last = mrtt_us << 3;
 }
 
 /* Set the sk_pacing_rate to allow proper sizing of TSO packets.
@@ -1920,6 +1923,17 @@ static inline void tcp_init_undo(struct tcp_sock *tp)
 	tp->undo_retrans = tp->retrans_out ? : -1;
 }
 
+static void mptcp_set_ca_state(struct sock *sk, const u8 ca_state)
+{
+	if (mptcp(tcp_sk(sk))) {
+		struct tcp_sock *tp = tcp_sk(sk);
+		if (tp->mpcb && tp->mpcb->sched_ops &&
+		    tp->mpcb->sched_ops->set_state)
+			tp->mpcb->sched_ops->set_state(sk, ca_state);
+	}
+	tcp_set_ca_state(sk, ca_state);
+}
+
 /* Enter Loss state. If we detect SACK reneging, forget all SACK information
  * and reset tags completely, otherwise preserve SACKs. If receiver
  * dropped its ofo queue, we will know this due to reneging detection.
@@ -1982,7 +1996,7 @@ void tcp_enter_loss(struct sock *sk)
 	    tp->sacked_out >= sysctl_tcp_reordering)
 		tp->reordering = min_t(unsigned int, tp->reordering,
 				       sysctl_tcp_reordering);
-	tcp_set_ca_state(sk, TCP_CA_Loss);
+	mptcp_set_ca_state(sk, TCP_CA_Loss);
 	tp->high_seq = tp->snd_nxt;
 	tcp_ecn_queue_cwr(tp);
 
@@ -2448,7 +2462,7 @@ static bool tcp_try_undo_recovery(struct sock *sk)
 			tp->retrans_stamp = 0;
 		return true;
 	}
-	tcp_set_ca_state(sk, TCP_CA_Open);
+	mptcp_set_ca_state(sk, TCP_CA_Open);
 	return false;
 }
 
@@ -2481,7 +2495,7 @@ static bool tcp_try_undo_loss(struct sock *sk, bool frto_undo)
 					 LINUX_MIB_TCPSPURIOUSRTOS);
 		inet_csk(sk)->icsk_retransmits = 0;
 		if (frto_undo || tcp_is_sack(tp))
-			tcp_set_ca_state(sk, TCP_CA_Open);
+			mptcp_set_ca_state(sk, TCP_CA_Open);
 		return true;
 	}
 	return false;
@@ -2557,7 +2571,7 @@ void tcp_enter_cwr(struct sock *sk)
 	if (inet_csk(sk)->icsk_ca_state < TCP_CA_CWR) {
 		tp->undo_marker = 0;
 		tcp_init_cwnd_reduction(sk);
-		tcp_set_ca_state(sk, TCP_CA_CWR);
+		mptcp_set_ca_state(sk, TCP_CA_CWR);
 	}
 }
 
@@ -2570,7 +2584,7 @@ static void tcp_try_keep_open(struct sock *sk)
 		state = TCP_CA_Disorder;
 
 	if (inet_csk(sk)->icsk_ca_state != state) {
-		tcp_set_ca_state(sk, state);
+		mptcp_set_ca_state(sk, state);
 		tp->high_seq = tp->snd_nxt;
 	}
 }
@@ -2666,7 +2680,7 @@ void tcp_simple_retransmit(struct sock *sk)
 		tp->snd_ssthresh = tcp_current_ssthresh(sk);
 		tp->prior_ssthresh = 0;
 		tp->undo_marker = 0;
-		tcp_set_ca_state(sk, TCP_CA_Loss);
+		mptcp_set_ca_state(sk, TCP_CA_Loss);
 	}
 	tcp_xmit_retransmit_queue(sk);
 }
@@ -2692,7 +2706,7 @@ static void tcp_enter_recovery(struct sock *sk, bool ece_ack)
 			tp->prior_ssthresh = tcp_current_ssthresh(sk);
 		tcp_init_cwnd_reduction(sk);
 	}
-	tcp_set_ca_state(sk, TCP_CA_Recovery);
+	mptcp_set_ca_state(sk, TCP_CA_Recovery);
 }
 
 /* Process an ACK in CA_Loss state. Move to CA_Open if lost data are
@@ -2829,7 +2843,7 @@ static void tcp_fastretrans_alert(struct sock *sk, const int acked,
 			 * is ACKed for CWR bit to reach receiver. */
 			if (tp->snd_una != tp->high_seq) {
 				tcp_end_cwnd_reduction(sk);
-				tcp_set_ca_state(sk, TCP_CA_Open);
+				mptcp_set_ca_state(sk, TCP_CA_Open);
 			}
 			break;
 
@@ -3165,6 +3179,19 @@ static int tcp_clean_rtx_queue(struct sock *sk, int prior_fackets,
 
 	rtt_update = tcp_ack_update_rtt(sk, flag, seq_rtt_us, sack_rtt_us);
 
+	if (sysctl_tcp_resched && (flag & FLAG_ACKED) && rtt_update) {
+		s32 delta = tp->rtt_lastresched - tp->rtt_last;
+		if (delta < 0)
+			delta = -delta;
+		if (usecs_to_jiffies(delta >> 4) <=
+		    msecs_to_jiffies(sysctl_tcp_resched)) {
+			tp->mptcp_noresched = true;
+		} else {
+			tp->mptcp_noresched = false;
+			tp->rtt_lastresched = tp->rtt_last;
+		}
+	}
+
 	if (flag & FLAG_ACKED) {
 		const struct tcp_congestion_ops *ca_ops
 			= inet_csk(sk)->icsk_ca_ops;
@@ -3447,7 +3474,7 @@ static void tcp_process_tlp_ack(struct sock *sk, u32 ack, int flag)
 		 * tlp_high_seq in tcp_init_cwnd_reduction()
 		 */
 		tcp_init_cwnd_reduction(sk);
-		tcp_set_ca_state(sk, TCP_CA_CWR);
+		mptcp_set_ca_state(sk, TCP_CA_CWR);
 		tcp_end_cwnd_reduction(sk);
 		tcp_try_keep_open(sk);
 		NET_INC_STATS_BH(sock_net(sk),

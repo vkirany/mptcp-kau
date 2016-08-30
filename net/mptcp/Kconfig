@@ -85,12 +85,39 @@ config MPTCP_ROUNDROBIN
 	  This is a very simple round-robin scheduler. Probably has bad performance
 	  but might be interesting for researchers.
 
+config MPTCP_STTF
+	tristate "MPTCP STTF"
+	depends on (MPTCP=y)
+	---help---
+	  The Shortest Transmission Time First (STTF) scheduler implements late
+	  scheduling to optimize the transmission time.
+
 config MPTCP_REDUNDANT
 	tristate "MPTCP Redundant"
 	depends on (MPTCP=y)
 	---help---
 	  This scheduler sends all packets redundantly over all subflows to decreases
 	  latency and jitter on the cost of lower throughput.
+
+config MPTCP_OTIAS
+	tristate "MPTCP OTIAS"
+	depends on (MPTCP=y)
+	---help---
+	  This is an experimental scheduler (OTIAS) that aims at improving performance
+	  when links have different RTTs.
+
+config MPTCP_BLEST
+        tristate "MPTCP BLEST"
+        depends on (MPTCP=y)
+        ---help---
+          This is an experimental (BLEST) scheduler. Receive buffer optimization can be disabled.
+
+config MPTCP_DAPS
+        tristate "MPTCP DAPS"
+        depends on (MPTCP=y)
+        ---help---
+          This is an experimental (DAPS) scheduler that aims at improving performance
+          when links have different RTTs.
 
 choice
 	prompt "Default MPTCP Scheduler"
@@ -110,11 +137,34 @@ choice
 		  This is the round-rob scheduler, sending in a round-robin
 		  fashion..
 
+	config DEFAULT_STTF
+		bool "sttf" if MPTCP_STTF=y
+		---help---
+		  This is the sttf scheduler, sending based on expected
+		  transmission time.
+
 	config DEFAULT_REDUNDANT
 		bool "Redundant" if MPTCP_REDUNDANT=y
 		---help---
 		  This is the redundant scheduler, sending packets redundantly over
 		  all the subflows.
+
+	config DEFAULT_OTIAS
+		bool "otias" if MPTCP_OTIAS=y
+		---help---
+		  This is an experimental scheduler (OTIAS) that aims at improving performance
+		  when links have different RTTS.
+
+	config DEFAULT_BLEST
+		bool "blest" if MPTCP_BLEST=y
+		---help---
+		  This is an experimental (BLEST) scheduler. Receive buffer optimization can be disabled.
+
+	config DEFAULT_DAPS
+		bool "daps" if MPTCP_DAPS=y
+		---help---
+		  This is an experimental (DAPS) scheduler that aims at improving performance
+		  when links have different RTTs.
 
 endchoice
 endif
@@ -124,6 +174,10 @@ config DEFAULT_MPTCP_SCHED
 	depends on (MPTCP=y)
 	default "default" if DEFAULT_SCHEDULER
 	default "roundrobin" if DEFAULT_ROUNDROBIN
+	default "sttf" if DEFAULT_STTF
 	default "redundant" if DEFAULT_REDUNDANT
+	default "otias" if DEFAULT_OTIAS
+	default "blest" if DEFAULT_BLEST
+	default "daps" if DEFAULT_DAPS
 	default "default"
 
