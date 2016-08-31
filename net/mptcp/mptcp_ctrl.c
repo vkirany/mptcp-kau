@@ -73,6 +73,14 @@ int sysctl_mptcp_syn_retries __read_mostly = 3;
 int sysctl_mptcp_exp_scheduling __read_mostly = 0;
 int sysctl_mptcp_fast_connect __read_mostly = 0;
 
+/* MPTCP-SCHED: debug:
+ *
+ * 	1 == skip cwnd verification in xmit
+ * 	2 == print scheduling decisions (similar to STTF)
+ * 	3 == skip tsq in temp-avail...
+ */
+int sysctl_mptcp_sched_debug __read_mostly = 0;
+
 bool mptcp_init_failed __read_mostly;
 
 struct static_key mptcp_static_key = STATIC_KEY_INIT_FALSE;
@@ -176,6 +184,13 @@ static struct ctl_table mptcp_table[] = {
 	{
 		.procname = "mptcp_fast_connect",
 		.data = &sysctl_mptcp_fast_connect,
+		.maxlen = sizeof(int),
+		.mode = 0644,
+		.proc_handler = &proc_dointvec
+	},
+	{
+		.procname = "mptcp_sched_debug",
+		.data = &sysctl_mptcp_sched_debug,
 		.maxlen = sizeof(int),
 		.mode = 0644,
 		.proc_handler = &proc_dointvec

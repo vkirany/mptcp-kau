@@ -68,7 +68,8 @@ static bool mptcp_is_temp_unavailable(struct sock *sk,
 	/* If TSQ is already throttling us, do not send on this subflow. When
 	 * TSQ gets cleared the subflow becomes eligible again.
 	 */
-	if (test_bit(TSQ_THROTTLED, &tp->tsq_flags))
+	if (sysctl_mptcp_sched_debug != 3 &&
+	    test_bit(TSQ_THROTTLED, &tp->tsq_flags))
 		return true;
 
 	in_flight = tcp_packets_in_flight(tp);
@@ -142,6 +143,7 @@ static struct sock
 			    bool zero_wnd_test, bool *force)
 {
 	struct sock *bestsk = NULL;
+	struct sock *meta_sk = mpcb->meta_sk;
 	u32 min_srtt = 0xffffffff;
 	bool found_unused = false;
 	bool found_unused_una = false;
@@ -163,14 +165,22 @@ static struct sock
 			 */
 			continue;
 
-		if (mptcp_is_def_unavailable(sk))
+		if (mptcp_is_def_unavailable(sk)) {
+			if (sysctl_mptcp_sched_debug == 2)
+				mptcp_calc_sched(meta_sk, sk, 2);
 			continue;
+		}
 
 		if (mptcp_is_temp_unavailable(sk, skb, zero_wnd_test)) {
 			if (unused)
 				found_unused_una = true;
+			if (sysctl_mptcp_sched_debug == 2)
+				mptcp_calc_sched(meta_sk, sk, 2);
 			continue;
 		}
+
+		if (sysctl_mptcp_sched_debug == 2)
+			mptcp_calc_sched(meta_sk, sk, 0)
 
 		if (unused) {
 			if (!found_unused) {
@@ -228,8 +238,13 @@ struct sock *get_available_subflow(struct sock *meta_sk, struct sk_buff *skb,
 	/* if there is only one subflow, bypass the scheduling function */
 	if (mpcb->cnt_subflows == 1) {
 		sk = (struct sock *)mpcb->connection_list;
-		if (!mptcp_is_available(sk, skb, zero_wnd_test))
+		if (!mptcp_is_available(sk, skb, zero_wnd_test)) {
+			if (sk && mptcp_is_temp_unavailable(sk, skb, zero_wnd_test))
+				mptcp_calc_sched(meta_sk, sk, 1);
 			sk = NULL;
+		}
+		if (sk)
+			mptcp_calc_sched(meta_sk, sk, 1);
 		return sk;
 	}
 
@@ -409,6 +424,9 @@ static struct sk_buff *mptcp_next_segment(struct sock *meta_sk,
 	mss_now = tcp_current_mss(*subsk);
 
 	if (!*reinject && unlikely(!tcp_snd_wnd_test(tcp_sk(meta_sk), skb, mss_now))) {
+		if (sysctl_mptcp_sched_debug == 2)
+			mptcp_calc_sched(meta_sk, *subsk, 2);
+
 		skb = mptcp_rcv_buf_optimization(*subsk, 1);
 		if (skb)
 			*reinject = -1;

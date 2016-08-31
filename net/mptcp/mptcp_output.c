@@ -1061,7 +1061,7 @@ schedule:
 	}
 write_xmit_done:
 
-	if (sysctl_mptcp_exp_scheduling)
+	if (sysctl_mptcp_exp_scheduling || sysctl_mptcp_sched_debug == 1)
 		goto write_xmit_exit;
 
 	mptcp_for_each_sk(mpcb, subsk) {

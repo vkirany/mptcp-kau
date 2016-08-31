@@ -669,6 +669,7 @@ extern int sysctl_mptcp_debug;
 extern int sysctl_mptcp_syn_retries;
 extern int sysctl_mptcp_exp_scheduling;
 extern int sysctl_mptcp_fast_connect;
+extern int sysctl_mptcp_sched_debug;
 
 extern struct workqueue_struct *mptcp_wq;
 
@@ -929,6 +930,9 @@ bool subflow_is_backup(const struct tcp_sock *tp);
 struct sock *get_available_subflow(struct sock *meta_sk, struct sk_buff *skb,
 				   bool zero_wnd_test);
 extern struct mptcp_sched_ops mptcp_sched_default;
+
+/* MPTCP-scheduler debug functions */
+void mptcp_calc_sched(struct sock *meta_sk, struct sock *subsk, int log);
 
 /* Initializes function-pointers and MPTCP-flags */
 static inline void mptcp_init_tcp_sock(struct sock *sk)
