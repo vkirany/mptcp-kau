@@ -6,21 +6,25 @@ static unsigned char debug __read_mostly = 0;
 module_param(debug, byte, 0644);
 MODULE_PARM_DESC(debug, "Print debug information");
 
-static unsigned char optim __read_mostly = 0;
-module_param(optim, byte, 0644);
-MODULE_PARM_DESC(optim, "1 = retransmit, 2 = retransmit+penalize, 0 = off");
+/* TODO: remove parameters when code stabilizes */
+static unsigned char optim __read_mostly = 1;
+//module_param(optim, byte, 0644);
+//MODULE_PARM_DESC(optim, "1 = retransmit, 2 = retransmit+penalize, 0 = off");
 
 static unsigned char tsq __read_mostly = 0;
-module_param(tsq, byte, 0644);
-MODULE_PARM_DESC(tsq, "0 = no TSQ, 1 = TSQ");
+//module_param(tsq, byte, 0644);
+//MODULE_PARM_DESC(tsq, "0 = no TSQ, 1 = TSQ");
 
 static unsigned char n_seg __read_mostly = 0;
-module_param(n_seg, byte, 0644);
-MODULE_PARM_DESC(n_seg, "1 = std next_segment, 0 = sttf way");
+//module_param(n_seg, byte, 0644);
+//MODULE_PARM_DESC(n_seg, "1 = std next_segment, 0 = sttf way");
 
+/* TODO: this default should be changed, make sure compute_tt is called at all
+ * appropriate places
+ */
 static unsigned char g_subflow __read_mostly = 0;
-module_param(g_subflow, byte, 0644);
-MODULE_PARM_DESC(g_subflow, "0 = sttf (old ver), 1 = new code structure");
+//module_param(g_subflow, byte, 0644);
+//MODULE_PARM_DESC(g_subflow, "0 = sttf (old ver), 1 = new code structure");
 
 
 #define __sdebug(fmt) "[sched] %s:%d::" fmt, __FUNCTION__, __LINE__
