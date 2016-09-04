@@ -4,9 +4,27 @@
 #include <linux/log2.h>
 
 #define __sdebug(fmt) "[sched] %s:%d::" fmt, __FUNCTION__, __LINE__
-#define sdebug(fmt, args...) if (debug) printk(KERN_WARNING __sdebug(fmt), ## args)
+#define sdebug(fmt, args...) if (sysctl_mptcp_sched_debug) printk(KERN_WARNING __sdebug(fmt), ## args)
 
 /* TODO: create function for selecting flows based on port... */
+static unsigned int tcp_unsent_pkts(const struct sock *sk)
+{
+	struct sk_buff *skb_it = tcp_send_head(sk);
+	unsigned int pkts = 0;
+
+	if (sk && skb_it) {
+		tcp_for_write_queue_from(skb_it, sk) {
+			/* Due to mptcp-specific stuff, nr of pkts in an
+			 * skb is set to 0 before it's added to
+			 * subsockets, TODO: why?/how to solve...
+			 */
+			//pkts += tcp_skb_pcount(skb_it);
+			pkts = pkts + 1;
+		}
+	}
+
+	return pkts;
+}
 
 static void inc_cwnd(u32* cwnd, u32 ssthresh )
 {

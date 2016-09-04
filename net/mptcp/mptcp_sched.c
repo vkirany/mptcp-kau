@@ -180,7 +180,7 @@ static struct sock
 		}
 
 		if (sysctl_mptcp_sched_debug == 2)
-			mptcp_calc_sched(meta_sk, sk, 0)
+			mptcp_calc_sched(meta_sk, sk, 0);
 
 		if (unused) {
 			if (!found_unused) {
