@@ -1,6 +1,18 @@
 #include <linux/module.h>
 #include <net/mptcp.h>
 
+static unsigned char nocwnd __read_mostly = 0;
+module_param(nocwnd, byte, 0644);
+MODULE_PARM_DESC(nocwnd, "1 == don't perform any cwnd checks");
+
+static unsigned char notsq __read_mostly = 0;
+module_param(notsq, byte, 0644);
+MODULE_PARM_DESC(notsq, "1 == don't perform tsq checks");
+
+static unsigned char debug __read_mostly = 0;
+module_param(debug, byte, 0644);
+MODULE_PARM_DESC(debug, "1 == debug scheduling decisions");
+
 struct defschedmod_priv {
 	u32	last_rbuf_opti;
 };
@@ -62,13 +74,13 @@ static bool mptcp_is_temp_unavailable(struct sock *sk,
 	/* If TSQ is already throttling us, do not send on this subflow. When
 	 * TSQ gets cleared the subflow becomes eligible again.
 	 */
-	if (sysctl_mptcp_sched_debug != 3 &&
+	if (sysctl_mptcp_sched_debug != 3 && !notsq &&
 	    test_bit(TSQ_THROTTLED, &tp->tsq_flags))
 		return true;
 
 	in_flight = tcp_packets_in_flight(tp);
 	/* Not even a single spot in the cwnd */
-	if (in_flight >= tp->snd_cwnd)
+	if (!nocwnd && (in_flight >= tp->snd_cwnd))
 		return true;
 
 	/* Now, check if what is queued in the subflow's send-queue
@@ -76,7 +88,7 @@ static bool mptcp_is_temp_unavailable(struct sock *sk,
 	 */
 	space = (tp->snd_cwnd - in_flight) * tp->mss_cache;
 
-	if (tp->write_seq - tp->snd_nxt > space)
+	if (!nocwnd && (tp->write_seq - tp->snd_nxt > space))
 		return true;
 
 	if (zero_wnd_test && !before(tp->write_seq, tcp_wnd_end(tp)))
@@ -439,9 +451,13 @@ static struct sk_buff *mptcp_next_segment(struct sock *meta_sk,
 	gso_max_segs = (*subsk)->sk_gso_max_segs;
 	if (!gso_max_segs) /* No gso supported on the subflow's NIC */
 		gso_max_segs = 1;
-	max_segs = min_t(unsigned int, tcp_cwnd_test(subtp, skb), gso_max_segs);
-	if (!max_segs)
-		return NULL;
+	if (!nocwnd) {
+		max_segs = min_t(unsigned int, tcp_cwnd_test(subtp, skb), gso_max_segs);
+		if (!max_segs)
+			return NULL;
+	} else {
+		max_segs = gso_max_segs;
+	}
 
 	max_len = mss_now * max_segs;
 	window = tcp_wnd_end(subtp) - subtp->write_seq;
