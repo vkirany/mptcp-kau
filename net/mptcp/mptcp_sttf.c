@@ -111,9 +111,7 @@ static bool mptcp_sttf_is_temp_unavailable(struct sock *sk,
 		/* Make sure that we send in-order data */
 		if (skb && tp->mptcp->second_packet &&
 	            tp->mptcp->last_end_data_seq != TCP_SKB_CB(skb)->seq) {
-			if (debug) {
-				sdebug("in-order\n");
-			}
+			sdebug("in-order\n");
 			return true;
 		}
 	}
@@ -287,7 +285,6 @@ end_calc:
 			sdebug("%d %u %u %u %u %u %u %u %u %u\n", tcp_sk(subsk)->mptcp->path_index, a, b, c, d, e, f, (g>>3), r, (tt>>3));
 		}
 
-		//sdebug("--- STOP CALCULATION ---\n");
 	}
 	return tt;
 }
@@ -712,6 +709,12 @@ static bool mptcp_nodiff_subs(struct sock *meta_sk)
 		if (tp->srtt_us < min_srtt)
 			min_srtt = tp->srtt_us;
 	}
+
+	sdebug("path diff, max: %u, min: %u, diff: %u\n",
+	       usecs_to_jiffies(max_srtt),
+	       usecs_to_jiffies(min_rtt),
+	       usecs_to_jiffies(max_srtt - min_srtt));
+
 	if (usecs_to_jiffies(max_srtt - min_srtt) <= 1)
 		return true;
 
