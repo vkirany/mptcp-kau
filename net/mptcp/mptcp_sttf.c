@@ -32,7 +32,6 @@ static unsigned char g_subflow __read_mostly = 0;
 
 struct sttf_priv {
 	u32	last_rbuf_opti;
-	bool rtt_diff;
 };
 
 static struct sttf_priv *sttf_get_priv(const struct tcp_sock *tp)
