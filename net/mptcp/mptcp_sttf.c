@@ -32,6 +32,7 @@ static unsigned char g_subflow __read_mostly = 0;
 
 struct sttf_priv {
 	u32	last_rbuf_opti;
+	bool rtt_diff;
 };
 
 static struct sttf_priv *sttf_get_priv(const struct tcp_sock *tp)
@@ -696,6 +697,27 @@ static struct sk_buff *__mptcp_next_segment(struct sock *meta_sk, int *reinject)
 	return skb;
 }
 
+static bool mptcp_nodiff_subs(struct sock *meta_sk)
+{
+	struct mptcp_cb *mpcb = tcp_sk(meta_sk)->mpcb;
+	struct sock *sk;
+	u32 max_srtt = 0;
+	u32 min_srtt = 0xffffffff;
+
+	mptcp_for_each_sk(mpcb, sk) {
+		struct tcp_sock *tp = tcp_sk(sk);
+
+		if (tp->srtt_us > max_srtt)
+			max_srtt = tp->srtt_us;
+		if (tp->srtt_us < min_srtt)
+			min_srtt = tp->srtt_us;
+	}
+	if (usecs_to_jiffies(max_srtt - min_srtt) <= 1)
+		return true;
+
+	return false;
+}
+
 static struct sk_buff *mptcp_next_segment(struct sock *meta_sk,
 					  int *reinject,
 					  struct sock **subsk,
@@ -706,6 +728,7 @@ static struct sk_buff *mptcp_next_segment(struct sock *meta_sk,
 	struct tcp_sock *subtp;
 	u16 gso_max_segs;
 	u32 max_len, max_segs, window, needed;
+	bool n_seg_tmp = false;
 
 	/* As we set it, we have to reset it as well. */
 	*limit = 0;
@@ -713,7 +736,12 @@ static struct sk_buff *mptcp_next_segment(struct sock *meta_sk,
 	if (!skb)
 		return NULL;
 
-	*subsk = get_sttf_available_subflow(meta_sk, skb, false);
+	if (mptcp_nodiff_subs(meta_sk)) {
+		*subsk = get_available_subflow(meta_sk, skb, false);
+		n_seg_tmp = true;
+	}
+	else
+		*subsk = get_sttf_available_subflow(meta_sk, skb, false);
 	if (!*subsk)
 		return NULL;
 
@@ -746,13 +774,16 @@ static struct sk_buff *mptcp_next_segment(struct sock *meta_sk,
 	gso_max_segs = (*subsk)->sk_gso_max_segs;
 	if (!gso_max_segs) /* No gso supported on the subflow's NIC */
 		gso_max_segs = 1;
-	if (n_seg) {
+	if (n_seg || n_seg_tmp) {
 		max_segs = min_t(unsigned int, tcp_cwnd_test(subtp, skb), gso_max_segs);
 		if (!max_segs)
 			return NULL;
 	} else {
 		max_segs = gso_max_segs;
 	}
+
+	if (n_seg_tmp)
+		n_seg_tmp = false;
 
 	max_len = mss_now * max_segs;
 	window = tcp_wnd_end(subtp) - subtp->write_seq;

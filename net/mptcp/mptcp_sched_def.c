@@ -22,6 +22,26 @@ static struct defschedmod_priv *defschedmod_get_priv(const struct tcp_sock *tp)
 	return (struct defschedmod_priv *)&tp->mptcp->mptcp_sched[0];
 }
 
+static unsigned int tcp_cwnd_deftest(const struct tcp_sock *tp, const struct sk_buff *skb)
+{
+	u32 in_flight, cwnd, halfcwnd;
+
+	/* Don't be strict about the congestion window for the final FIN.  */
+	if (skb && (TCP_SKB_CB(skb)->tcp_flags & TCPHDR_FIN) && tcp_skb_pcount(skb) == 1)
+		return 1;
+
+	in_flight = tcp_packets_in_flight(tp);
+	cwnd = tp->snd_cwnd;
+
+	if (in_flight >= cwnd)
+		return 0;
+
+	/* For better scheduling, ensure we have at least 2 GSO packets in flight. */
+	halfcwnd = max(cwnd >> 1, 1U);
+
+	return min(halfcwnd, cwnd - in_flight);
+}
+
 static bool mptcp_is_defmod_unavailable(struct sock *sk)
 {
 	const struct tcp_sock *tp = tcp_sk(sk);
@@ -452,7 +472,7 @@ static struct sk_buff *mptcp_next_segment(struct sock *meta_sk,
 	if (!gso_max_segs) /* No gso supported on the subflow's NIC */
 		gso_max_segs = 1;
 	if (!nocwnd) {
-		max_segs = min_t(unsigned int, tcp_cwnd_test(subtp, skb), gso_max_segs);
+		max_segs = min_t(unsigned int, tcp_cwnd_deftest(subtp, skb), gso_max_segs);
 		if (!max_segs)
 			return NULL;
 	} else {

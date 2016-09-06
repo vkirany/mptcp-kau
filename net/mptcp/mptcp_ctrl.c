@@ -80,6 +80,7 @@ int sysctl_mptcp_fast_connect __read_mostly = 0;
  * 	3 == skip tsq in temp-avail...
  */
 int sysctl_mptcp_sched_debug __read_mostly = 0;
+EXPORT_SYMBOL(sysctl_mptcp_sched_debug);
 
 bool mptcp_init_failed __read_mostly;
 

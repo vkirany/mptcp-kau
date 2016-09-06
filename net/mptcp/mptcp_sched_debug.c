@@ -160,3 +160,4 @@ end_calc:
 		}
 	}
 }
+EXPORT_SYMBOL_GPL(mptcp_calc_sched);
