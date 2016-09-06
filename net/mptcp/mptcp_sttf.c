@@ -6,6 +6,10 @@ static unsigned char debug __read_mostly = 0;
 module_param(debug, byte, 0644);
 MODULE_PARM_DESC(debug, "Print debug information");
 
+static int alpha __read_mostly = 10;
+module_param(alpha, int, 0644);
+MODULE_PARM_DESC(alpha, "RTT fraction diff to use STTF, default=10");
+
 /* TODO: remove parameters when code stabilizes */
 static unsigned char optim __read_mostly = 1;
 //module_param(optim, byte, 0644);
@@ -700,6 +704,9 @@ static bool mptcp_nodiff_subs(struct sock *meta_sk)
 	u32 max_srtt = 0;
 	u32 min_srtt = 0xffffffff;
 
+	if (mpcb->cnt_subflows == 1)
+		return false;
+
 	mptcp_for_each_sk(mpcb, sk) {
 		struct tcp_sock *tp = tcp_sk(sk);
 
@@ -709,13 +716,25 @@ static bool mptcp_nodiff_subs(struct sock *meta_sk)
 			min_srtt = tp->srtt_us;
 	}
 
-	sdebug("path diff, max: %u, min: %u, diff: %u\n",
+	sdebug("path diff, max: %lu, min: %lu, diff: %lu\n",
 	       usecs_to_jiffies(max_srtt),
-	       usecs_to_jiffies(min_rtt),
+	       usecs_to_jiffies(min_srtt),
 	       usecs_to_jiffies(max_srtt - min_srtt));
 
-	if (usecs_to_jiffies(max_srtt - min_srtt) <= 1)
+	if (usecs_to_jiffies(max_srtt - min_srtt) <= 1) {
+		sdebug("diff too small (%lu jiffies), using default scheduler\n",
+		       usecs_to_jiffies(max_srtt - min_srtt));
 		return true;
+	}
+
+	/* TODO: figure out fraction of relation between max/min and use limit
+	 * to restrict sttf-usage (currently == alpha).
+	 */
+	if (((max_srtt * 100) / min_srtt) < (alpha + 100)) {
+		sdebug("possible gain too small (%u pcnt), using default scheduler\n",
+		       ((max_srtt * 100) / min_srtt - 100));
+		return true;
+	}
 
 	return false;
 }
@@ -830,6 +849,7 @@ static int __init sttf_register(void)
 
 static void sttf_unregister(void)
 {
+	printk(KERN_WARNING "unloading mptcp_sttf\n");
 	mptcp_unregister_scheduler(&mptcp_sttf);
 }
 

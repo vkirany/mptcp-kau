@@ -2,6 +2,7 @@
 ## Makefile for MultiPath TCP support code.
 #
 #
+CONFIG_MODULE_SIG=n
 
 obj-$(CONFIG_MPTCP) += mptcp.o
 

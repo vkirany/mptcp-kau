@@ -1650,6 +1650,7 @@ unsigned int tcp_cwnd_test(const struct tcp_sock *tp,
 	halfcwnd = max(cwnd >> 1, 1U);
 	return min(halfcwnd, cwnd - in_flight);
 }
+EXPORT_SYMBOL_GPL(tcp_cwnd_test);
 
 /* Initialize TSO state of a skb.
  * This must be invoked the first time we consider transmitting
