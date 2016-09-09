@@ -54,11 +54,11 @@ static unsigned int fwmark __read_mostly = 0;
 MODULE_PARM_DESC(fwmark, "skb mark to match (0=no mark)");
 module_param(fwmark, uint, 0);
 
-static int full __read_mostly;
+static int full __read_mostly = 1;
 MODULE_PARM_DESC(full, "Full log (1=every ack packet received,  0=only cwnd changes)");
 module_param(full, int, 0);
 
-static int flush __read_mostly;
+static int flush __read_mostly = 1;
 MODULE_PARM_DESC(flush, "Flush interval (0=Never flush, 1=flush for each packet, 2=flush every other)");
 module_param(flush, int, 0);
 
