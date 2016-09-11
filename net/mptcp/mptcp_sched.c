@@ -68,7 +68,8 @@ static bool mptcp_is_temp_unavailable(struct sock *sk,
 	/* If TSQ is already throttling us, do not send on this subflow. When
 	 * TSQ gets cleared the subflow becomes eligible again.
 	 */
-	if (sysctl_mptcp_sched_debug != 3 &&
+	if ((sysctl_mptcp_sched_debug != 3   ||
+	     sysctl_mptcp_sched_debug != 5 ) &&
 	    test_bit(TSQ_THROTTLED, &tp->tsq_flags))
 		return true;
 
@@ -166,7 +167,8 @@ static struct sock
 			continue;
 
 		if (mptcp_is_def_unavailable(sk)) {
-			if (sysctl_mptcp_sched_debug == 2)
+			if (sysctl_mptcp_sched_debug == 2 ||
+			    sysctl_mptcp_sched_debug == 5)
 				mptcp_calc_sched(meta_sk, sk, 2);
 			continue;
 		}
@@ -174,12 +176,14 @@ static struct sock
 		if (mptcp_is_temp_unavailable(sk, skb, zero_wnd_test)) {
 			if (unused)
 				found_unused_una = true;
-			if (sysctl_mptcp_sched_debug == 2)
+			if (sysctl_mptcp_sched_debug == 2 ||
+			    sysctl_mptcp_sched_debug == 5)
 				mptcp_calc_sched(meta_sk, sk, 2);
 			continue;
 		}
 
-		if (sysctl_mptcp_sched_debug == 2)
+		if (sysctl_mptcp_sched_debug == 2 ||
+		    sysctl_mptcp_sched_debug == 5)
 			mptcp_calc_sched(meta_sk, sk, 0);
 
 		if (unused) {
@@ -424,7 +428,8 @@ static struct sk_buff *mptcp_next_segment(struct sock *meta_sk,
 	mss_now = tcp_current_mss(*subsk);
 
 	if (!*reinject && unlikely(!tcp_snd_wnd_test(tcp_sk(meta_sk), skb, mss_now))) {
-		if (sysctl_mptcp_sched_debug == 2)
+		if (sysctl_mptcp_sched_debug == 2 ||
+		    sysctl_mptcp_sched_debug == 5)
 			mptcp_calc_sched(meta_sk, *subsk, 2);
 
 		skb = mptcp_rcv_buf_optimization(*subsk, 1);

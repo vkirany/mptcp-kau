@@ -78,6 +78,7 @@ int sysctl_mptcp_fast_connect __read_mostly = 0;
  * 	1 == skip cwnd verification in xmit
  * 	2 == print scheduling decisions (similar to STTF)
  * 	3 == skip tsq in temp-avail...
+ * 	4 == 3 + 2
  */
 int sysctl_mptcp_sched_debug __read_mostly = 0;
 EXPORT_SYMBOL(sysctl_mptcp_sched_debug);
