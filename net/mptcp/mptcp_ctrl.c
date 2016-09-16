@@ -78,10 +78,17 @@ int sysctl_mptcp_fast_connect __read_mostly = 0;
  * 	1 == skip cwnd verification in xmit
  * 	2 == print scheduling decisions (similar to STTF)
  * 	3 == skip tsq in temp-avail...
- * 	4 == 3 + 2
+ * 	5 == 3 + 2
  */
 int sysctl_mptcp_sched_debug __read_mostly = 0;
 EXPORT_SYMBOL(sysctl_mptcp_sched_debug);
+
+/* MPTCP-SCHED: cc:
+ * 	0 == default behavior
+ * 	1 == be stricter in cc check
+ */
+int sysctl_mptcp_sched_cc __read_mostly = 0;
+EXPORT_SYMBOL(sysctl_mptcp_sched_cc);
 
 bool mptcp_init_failed __read_mostly;
 
@@ -193,6 +200,13 @@ static struct ctl_table mptcp_table[] = {
 	{
 		.procname = "mptcp_sched_debug",
 		.data = &sysctl_mptcp_sched_debug,
+		.maxlen = sizeof(int),
+		.mode = 0644,
+		.proc_handler = &proc_dointvec
+	},
+	{
+		.procname = "mptcp_sched_cc",
+		.data = &sysctl_mptcp_sched_cc,
 		.maxlen = sizeof(int),
 		.mode = 0644,
 		.proc_handler = &proc_dointvec

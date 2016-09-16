@@ -114,7 +114,6 @@ static bool mptcp_sttf_is_temp_unavailable(struct sock *sk,
 		/* Make sure that we send in-order data */
 		if (skb && tp->mptcp->second_packet &&
 	            tp->mptcp->last_end_data_seq != TCP_SKB_CB(skb)->seq) {
-			sdebug("in-order\n");
 			return true;
 		}
 	}
@@ -716,14 +715,14 @@ static bool mptcp_nodiff_subs(struct sock *meta_sk)
 			min_srtt = tp->srtt_us;
 	}
 
-	sdebug("path diff, max: %lu, min: %lu, diff: %lu\n",
+	/*sdebug("path diff, max: %lu, min: %lu, diff: %lu\n",
 	       usecs_to_jiffies(max_srtt),
 	       usecs_to_jiffies(min_srtt),
-	       usecs_to_jiffies(max_srtt - min_srtt));
+	       usecs_to_jiffies(max_srtt - min_srtt));*/
 
 	if (usecs_to_jiffies(max_srtt - min_srtt) <= 1) {
-		sdebug("diff too small (%lu jiffies), using default scheduler\n",
-		       usecs_to_jiffies(max_srtt - min_srtt));
+		/*sdebug("diff too small (%lu jiffies), using default scheduler\n",
+		       usecs_to_jiffies(max_srtt - min_srtt));*/
 		return true;
 	}
 
@@ -731,8 +730,8 @@ static bool mptcp_nodiff_subs(struct sock *meta_sk)
 	 * to restrict sttf-usage (currently == alpha).
 	 */
 	if (((max_srtt * 100) / min_srtt) < (alpha + 100)) {
-		sdebug("possible gain too small (%u pcnt), using default scheduler\n",
-		       ((max_srtt * 100) / min_srtt - 100));
+		/*sdebug("possible gain too small (%u pcnt), using default scheduler\n",
+		       ((max_srtt * 100) / min_srtt - 100));*/
 		return true;
 	}
 

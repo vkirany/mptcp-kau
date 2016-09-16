@@ -670,6 +670,7 @@ extern int sysctl_mptcp_syn_retries;
 extern int sysctl_mptcp_exp_scheduling;
 extern int sysctl_mptcp_fast_connect;
 extern int sysctl_mptcp_sched_debug;
+extern int sysctl_mptcp_sched_cc;
 
 extern struct workqueue_struct *mptcp_wq;
 

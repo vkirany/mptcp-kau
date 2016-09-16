@@ -54,7 +54,7 @@ void mptcp_calc_sched(struct sock *meta_sk, struct sock *subsk, int log)
 	u32 qsize = d = qsize_meta + qsize_curr_flow;
 	u32 cwnd = e = subtp->snd_cwnd;
 	u32 ssthresh = f = subtp->snd_ssthresh;
-	u32 rtt = g = subtp->rtt_last;
+	u32 rtt = g = subtp->srtt_us;
 	u32 tt = 0;
 	u32 r = 0;
 
@@ -155,6 +155,12 @@ end_calc:
 			sdebug("%d# %u %u %u %u %u %u %u %u %u\n", tcp_sk(subsk)->mptcp->path_index, a, b, c, d, e, f, (g>>3), r, (tt>>3));
 		} else if (log == 2) {
 			sdebug("%d$ %u %u %u %u %u %u %u %u %u\n", tcp_sk(subsk)->mptcp->path_index, a, b, c, d, e, f, (g>>3), r, (tt>>3));
+		} else if (log == 3) {
+			sdebug("%d! %u %u %u %u %u %u %u %u %u\n", tcp_sk(subsk)->mptcp->path_index, a, b, c, d, e, f, (g>>3), r, (tt>>3));
+		} else if (log == 4) {
+			sdebug("%d& %u %u %u %u %u %u %u %u %u\n", tcp_sk(subsk)->mptcp->path_index, a, b, c, d, e, f, (g>>3), r, (tt>>3));
+		} else if (log == 5) {
+			sdebug("%dA %u %u %u %u %u %u %u %u %u\n", tcp_sk(subsk)->mptcp->path_index, a, b, c, d, e, f, (g>>3), r, (tt>>3));
 		} else {
 			sdebug("%d %u %u %u %u %u %u %u %u %u\n", tcp_sk(subsk)->mptcp->path_index, a, b, c, d, e, f, (g>>3), r, (tt>>3));
 		}

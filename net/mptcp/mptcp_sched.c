@@ -3,6 +3,9 @@
 #include <linux/module.h>
 #include <net/mptcp.h>
 
+#define __sdebug(fmt) "[sched] %s:%d::" fmt, __FUNCTION__, __LINE__
+#define sdebug(fmt, args...) if (sysctl_mptcp_sched_debug) printk(KERN_WARNING __sdebug(fmt), ## args)
+
 static DEFINE_SPINLOCK(mptcp_sched_list_lock);
 static LIST_HEAD(mptcp_sched_list);
 
@@ -41,6 +44,7 @@ static bool mptcp_is_temp_unavailable(struct sock *sk,
 				      bool zero_wnd_test)
 {
 	const struct tcp_sock *tp = tcp_sk(sk);
+	struct sock *meta_sk = mptcp_meta_sk(sk);
 	unsigned int mss_now, space, in_flight;
 
 	if (inet_csk(sk)->icsk_ca_state == TCP_CA_Loss) {
@@ -61,33 +65,44 @@ static bool mptcp_is_temp_unavailable(struct sock *sk,
 	if (!tp->mptcp->fully_established) {
 		/* Make sure that we send in-order data */
 		if (skb && tp->mptcp->second_packet &&
-		    tp->mptcp->last_end_data_seq != TCP_SKB_CB(skb)->seq)
+		    tp->mptcp->last_end_data_seq != TCP_SKB_CB(skb)->seq) {
 			return true;
+		}
 	}
 
 	/* If TSQ is already throttling us, do not send on this subflow. When
 	 * TSQ gets cleared the subflow becomes eligible again.
 	 */
-	if ((sysctl_mptcp_sched_debug != 3   ||
-	     sysctl_mptcp_sched_debug != 5 ) &&
-	    test_bit(TSQ_THROTTLED, &tp->tsq_flags))
-		return true;
+	if ((sysctl_mptcp_sched_debug == 3) || (sysctl_mptcp_sched_debug == 5))
+		goto skip_tsq;
 
-	in_flight = tcp_packets_in_flight(tp);
-	/* Not even a single spot in the cwnd */
-	if (in_flight >= tp->snd_cwnd)
+	if (test_bit(TSQ_THROTTLED, &tp->tsq_flags)) {
+		if (meta_sk && (sysctl_mptcp_sched_debug == 2 ||
+		    sysctl_mptcp_sched_debug == 5))
+			mptcp_calc_sched(meta_sk, sk, 4);
 		return true;
+	}
+
+skip_tsq:
+	in_flight = tcp_packets_in_flight(tp);
+
+	/* Not even a single spot in the cwnd */
+	if (in_flight >= tp->snd_cwnd) {
+		return true;
+	}
 
 	/* Now, check if what is queued in the subflow's send-queue
 	 * already fills the cwnd.
 	 */
 	space = (tp->snd_cwnd - in_flight) * tp->mss_cache;
 
-	if (tp->write_seq - tp->snd_nxt > space)
+	if (tp->write_seq - tp->snd_nxt > space) {
 		return true;
+	}
 
-	if (zero_wnd_test && !before(tp->write_seq, tcp_wnd_end(tp)))
+	if (zero_wnd_test && !before(tp->write_seq, tcp_wnd_end(tp))) {
 		return true;
+	}
 
 	mss_now = tcp_current_mss(sk);
 
@@ -97,8 +112,9 @@ static bool mptcp_is_temp_unavailable(struct sock *sk,
 	 * the meta-level).
 	 */
 	if (skb && !zero_wnd_test &&
-	    after(tp->write_seq + min(skb->len, mss_now), tcp_wnd_end(tp)))
+	    after(tp->write_seq + min(skb->len, mss_now), tcp_wnd_end(tp))) {
 		return true;
+	}
 
 	return false;
 }
@@ -178,7 +194,7 @@ static struct sock
 				found_unused_una = true;
 			if (sysctl_mptcp_sched_debug == 2 ||
 			    sysctl_mptcp_sched_debug == 5)
-				mptcp_calc_sched(meta_sk, sk, 2);
+				mptcp_calc_sched(meta_sk, sk, 3);
 			continue;
 		}
 
@@ -244,10 +260,13 @@ struct sock *get_available_subflow(struct sock *meta_sk, struct sk_buff *skb,
 		sk = (struct sock *)mpcb->connection_list;
 		if (!mptcp_is_available(sk, skb, zero_wnd_test)) {
 			if (sk && mptcp_is_temp_unavailable(sk, skb, zero_wnd_test))
-				mptcp_calc_sched(meta_sk, sk, 1);
+				if (sysctl_mptcp_sched_debug == 2 ||
+				    sysctl_mptcp_sched_debug == 5)
+					mptcp_calc_sched(meta_sk, sk, 1);
 			sk = NULL;
 		}
-		if (sk)
+		if (sk && (sysctl_mptcp_sched_debug == 2 ||
+			   sysctl_mptcp_sched_debug == 5))
 			mptcp_calc_sched(meta_sk, sk, 1);
 		return sk;
 	}
@@ -430,7 +449,7 @@ static struct sk_buff *mptcp_next_segment(struct sock *meta_sk,
 	if (!*reinject && unlikely(!tcp_snd_wnd_test(tcp_sk(meta_sk), skb, mss_now))) {
 		if (sysctl_mptcp_sched_debug == 2 ||
 		    sysctl_mptcp_sched_debug == 5)
-			mptcp_calc_sched(meta_sk, *subsk, 2);
+			mptcp_calc_sched(meta_sk, *subsk, 5);
 
 		skb = mptcp_rcv_buf_optimization(*subsk, 1);
 		if (skb)
