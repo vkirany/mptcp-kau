@@ -98,6 +98,12 @@ config MPTCP_DEFMOD
 	---help---
 	  Modularized version of the default scheduler.
 
+config MPTCP_LAZY
+	tristate "MPTCP_LAZY"
+	depends on (MPTCP=y)
+	---help---
+	  Lazy scheduler for improved latency.
+
 config MPTCP_REDUNDANT
 	tristate "MPTCP Redundant"
 	depends on (MPTCP=y)
@@ -154,6 +160,11 @@ choice
 		---help---
 		  Modularized version of the default scheduler
 
+	config DEFAULT_LAZY
+		bool "lazy" if MPTCP_LAZY=y
+		---help---
+		  Lazy scheduler for improved latency
+
 	config DEFAULT_REDUNDANT
 		bool "Redundant" if MPTCP_REDUNDANT=y
 		---help---
@@ -187,6 +198,7 @@ config DEFAULT_MPTCP_SCHED
 	default "roundrobin" if DEFAULT_ROUNDROBIN
 	default "sttf" if DEFAULT_STTF
 	default "defaultmod" if DEFAULT_DEFMOD
+	default "lazy" if DEFAULT_LAZY
 	default "redundant" if DEFAULT_REDUNDANT
 	default "otias" if DEFAULT_OTIAS
 	default "blest" if DEFAULT_BLEST

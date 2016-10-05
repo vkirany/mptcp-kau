@@ -1061,8 +1061,13 @@ schedule:
 	}
 write_xmit_done:
 
+	if (sysctl_mptcp_orig_cwv)
+		goto write_xmit_cwv;
+
 	if (sysctl_mptcp_exp_scheduling || sysctl_mptcp_sched_debug == 1)
 		goto write_xmit_exit;
+
+write_xmit_cwv:
 
 	mptcp_for_each_sk(mpcb, subsk) {
 		subtp = tcp_sk(subsk);

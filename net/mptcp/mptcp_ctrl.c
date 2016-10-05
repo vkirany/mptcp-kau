@@ -75,7 +75,7 @@ int sysctl_mptcp_fast_connect __read_mostly = 0;
 
 /* MPTCP-SCHED: debug:
  *
- * 	1 == skip cwnd verification in xmit
+ * 	1 == skip cwnd verification in xmit, and do it in tcp_xmit instead...
  * 	2 == print scheduling decisions (similar to STTF)
  * 	3 == skip tsq in temp-avail...
  * 	5 == 3 + 2
@@ -89,6 +89,18 @@ EXPORT_SYMBOL(sysctl_mptcp_sched_debug);
  */
 int sysctl_mptcp_sched_cc __read_mostly = 0;
 EXPORT_SYMBOL(sysctl_mptcp_sched_cc);
+
+/* MPTCP-SCHED: print
+ * 	0 == default behavior
+ * 	1 == print sched decisions
+ *
+ * 	(not fully utilised yet)
+ */
+int sysctl_mptcp_sched_print __read_mostly = 0;
+EXPORT_SYMBOL(sysctl_mptcp_sched_print);
+
+int sysctl_mptcp_orig_cwv __read_mostly = 0;
+EXPORT_SYMBOL(sysctl_mptcp_orig_cwv);
 
 bool mptcp_init_failed __read_mostly;
 
@@ -207,6 +219,20 @@ static struct ctl_table mptcp_table[] = {
 	{
 		.procname = "mptcp_sched_cc",
 		.data = &sysctl_mptcp_sched_cc,
+		.maxlen = sizeof(int),
+		.mode = 0644,
+		.proc_handler = &proc_dointvec
+	},
+	{
+		.procname = "mptcp_sched_print",
+		.data = &sysctl_mptcp_sched_print,
+		.maxlen = sizeof(int),
+		.mode = 0644,
+		.proc_handler = &proc_dointvec
+	},
+	{
+		.procname = "mptcp_orig_cwv",
+		.data = &sysctl_mptcp_orig_cwv,
 		.maxlen = sizeof(int),
 		.mode = 0644,
 		.proc_handler = &proc_dointvec

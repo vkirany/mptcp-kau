@@ -19,6 +19,7 @@ obj-$(CONFIG_MPTCP_BINDER) += mptcp_binder.o
 obj-$(CONFIG_MPTCP_ROUNDROBIN) += mptcp_rr.o
 obj-$(CONFIG_MPTCP_STTF) += mptcp_sttf.o
 obj-$(CONFIG_MPTCP_DEFMOD) += mptcp_sched_def.o
+obj-$(CONFIG_MPTCP_LAZY) += mptcp_lazy.o
 obj-$(CONFIG_MPTCP_REDUNDANT) += mptcp_redundant.o
 obj-$(CONFIG_MPTCP_OTIAS) += mptcp_otias.o
 obj-$(CONFIG_MPTCP_DAPS) += mptcp_daps.o

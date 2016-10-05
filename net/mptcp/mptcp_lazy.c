@@ -3,22 +3,24 @@
 #include <linux/module.h>
 #include <net/mptcp.h>
 
+static unsigned char debug __read_mostly = 0;
+module_param(debug, byte, 0644);
+MODULE_PARM_DESC(debug, "1 == debug scheduling decisions");
+
 #define __sdebug(fmt) "[sched] %s:%d::" fmt, __FUNCTION__, __LINE__
-#define sdebug(fmt, args...) if (sysctl_mptcp_sched_debug) printk(KERN_WARNING __sdebug(fmt), ## args)
+#define sdebug(fmt, args...) if (debug) printk(KERN_WARNING __sdebug(fmt), ## args)
 
-static DEFINE_SPINLOCK(mptcp_sched_list_lock);
-static LIST_HEAD(mptcp_sched_list);
 
-struct defsched_priv {
+struct lazysched_priv {
 	u32	last_rbuf_opti;
 };
 
-static struct defsched_priv *defsched_get_priv(const struct tcp_sock *tp)
+static struct lazysched_priv *lazysched_get_priv(const struct tcp_sock *tp)
 {
-	return (struct defsched_priv *)&tp->mptcp->mptcp_sched[0];
+	return (struct lazysched_priv *)&tp->mptcp->mptcp_sched[0];
 }
 
-bool mptcp_is_def_unavailable(struct sock *sk)
+bool mptcp_is_lazy_def_unavailable(struct sock *sk)
 {
 	const struct tcp_sock *tp = tcp_sk(sk);
 
@@ -37,15 +39,29 @@ bool mptcp_is_def_unavailable(struct sock *sk)
 
 	return false;
 }
-EXPORT_SYMBOL_GPL(mptcp_is_def_unavailable);
 
-static bool mptcp_is_temp_unavailable(struct sock *sk,
+static bool mptcp_is_lazy(struct sock *sk, const struct sk_buff *skb)
+{
+	const struct tcp_sock *tp = tcp_sk(sk);
+	unsigned int in_flight = tcp_packets_in_flight(tp) * tp->mss_cache;
+	unsigned int cwnd = tp->snd_cwnd * tp->mss_cache;
+	unsigned int queued = tp->write_seq - tp->snd_nxt;
+
+	if (queued + in_flight + 1 >= cwnd << 1)
+		return false;
+
+	return true;
+}
+
+static bool mptcp_is_lazy_temp_unavailable(struct sock *sk,
 				      const struct sk_buff *skb,
-				      bool zero_wnd_test)
+				      bool zero_wnd_test,
+				      bool *lazy)
 {
 	const struct tcp_sock *tp = tcp_sk(sk);
 	struct sock *meta_sk = mptcp_meta_sk(sk);
 	unsigned int mss_now, space, in_flight;
+	*lazy = false;
 
 	if (inet_csk(sk)->icsk_ca_state == TCP_CA_Loss) {
 		/* If SACK is disabled, and we got a loss, TCP does not exit
@@ -70,21 +86,21 @@ static bool mptcp_is_temp_unavailable(struct sock *sk,
 		}
 	}
 
+	/* we regard the rest of the conditions as "lazy" iff the subflow can
+	 * transmit within the next congestion window and is significantly
+	 * faster than all other subflows (2x)
+	 */
+	*lazy = mptcp_is_lazy(sk, skb);
+
 	/* If TSQ is already throttling us, do not send on this subflow. When
 	 * TSQ gets cleared the subflow becomes eligible again.
 	 */
-	if ((sysctl_mptcp_sched_debug == 3) || (sysctl_mptcp_sched_debug == 5))
-		goto skip_tsq;
-
 	if (test_bit(TSQ_THROTTLED, &tp->tsq_flags)) {
-		if (meta_sk && (sysctl_mptcp_sched_debug == 2 ||
-		    sysctl_mptcp_sched_debug == 5 ||
-		    sysctl_mptcp_sched_print))
+		if (meta_sk && debug)
 			mptcp_calc_sched(meta_sk, sk, 4);
 		return true;
 	}
 
-skip_tsq:
 	in_flight = tcp_packets_in_flight(tp);
 
 	/* Not even a single spot in the cwnd */
@@ -120,14 +136,15 @@ skip_tsq:
 	return false;
 }
 
+
 /* Is the sub-socket sk available to send the skb? */
-bool mptcp_is_available(struct sock *sk, const struct sk_buff *skb,
+bool mptcp_is_lazy_available(struct sock *sk, const struct sk_buff *skb,
 			bool zero_wnd_test)
 {
-	return !mptcp_is_def_unavailable(sk) &&
-	       !mptcp_is_temp_unavailable(sk, skb, zero_wnd_test);
+	bool tmp = false;
+	return !mptcp_is_lazy_def_unavailable(sk) &&
+	       !mptcp_is_lazy_temp_unavailable(sk, skb, zero_wnd_test, &tmp);
 }
-EXPORT_SYMBOL_GPL(mptcp_is_available);
 
 /* Are we not allowed to reinject this skb on tp? */
 static int mptcp_dont_reinject_skb(const struct tcp_sock *tp, const struct sk_buff *skb)
@@ -140,18 +157,6 @@ static int mptcp_dont_reinject_skb(const struct tcp_sock *tp, const struct sk_bu
 		mptcp_pi_to_flag(tp->mptcp->path_index) & TCP_SKB_CB(skb)->path_mask;
 }
 
-bool subflow_is_backup(const struct tcp_sock *tp)
-{
-	return tp->mptcp->rcv_low_prio || tp->mptcp->low_prio;
-}
-EXPORT_SYMBOL_GPL(subflow_is_backup);
-
-bool subflow_is_active(const struct tcp_sock *tp)
-{
-	return !tp->mptcp->rcv_low_prio && !tp->mptcp->low_prio;
-}
-EXPORT_SYMBOL_GPL(subflow_is_active);
-
 /* Generic function to iterate over used and unused subflows and to select the
  * best one
  */
@@ -163,6 +168,7 @@ static struct sock
 	struct sock *bestsk = NULL;
 	struct sock *meta_sk = mpcb->meta_sk;
 	u32 min_srtt = 0xffffffff;
+	u32 lazy_min = 0xffffffff;
 	bool found_unused = false;
 	bool found_unused_una = false;
 	struct sock *sk;
@@ -170,6 +176,7 @@ static struct sock
 	mptcp_for_each_sk(mpcb, sk) {
 		struct tcp_sock *tp = tcp_sk(sk);
 		bool unused = false;
+		bool lazy = false;
 
 		/* First, we choose only the wanted sks */
 		if (!(*selector)(tp))
@@ -183,27 +190,26 @@ static struct sock
 			 */
 			continue;
 
-		if (mptcp_is_def_unavailable(sk)) {
-			if (sysctl_mptcp_sched_debug == 2 ||
-			    sysctl_mptcp_sched_debug == 5 ||
-			    sysctl_mptcp_sched_print)
+		if (mptcp_is_lazy_def_unavailable(sk)) {
+			if (debug)
 				mptcp_calc_sched(meta_sk, sk, 2);
 			continue;
 		}
 
-		if (mptcp_is_temp_unavailable(sk, skb, zero_wnd_test)) {
+		if (mptcp_is_lazy_temp_unavailable(sk, skb, zero_wnd_test, &lazy)) {
+			if (lazy) {
+				if (tp->srtt_us < lazy_min) {
+					lazy_min = tp->srtt_us;
+				}
+			}
 			if (unused)
 				found_unused_una = true;
-			if (sysctl_mptcp_sched_debug == 2 ||
-			    sysctl_mptcp_sched_debug == 5 ||
-			    sysctl_mptcp_sched_print)
+			if (debug)
 				mptcp_calc_sched(meta_sk, sk, 3);
 			continue;
 		}
 
-		if (sysctl_mptcp_sched_debug == 2 ||
-		    sysctl_mptcp_sched_debug == 5 ||
-		    sysctl_mptcp_sched_print)
+		if (debug)
 			mptcp_calc_sched(meta_sk, sk, 0);
 
 		if (unused) {
@@ -232,6 +238,12 @@ static struct sock
 			*force = true;
 		else
 			*force = false;
+		if (lazy_min < min_srtt) {
+			if (lazy_min << 1 < min_srtt) {
+				*force = true;
+				return NULL;
+			}
+		}
 	} else {
 		/* The force variable is used to mark if there are temporally
 		 * unavailable not-used sks.
@@ -245,34 +257,28 @@ static struct sock
 	return bestsk;
 }
 
-/* This is the scheduler. This function decides on which flow to send
- * a given MSS. If all subflows are found to be busy, NULL is returned
- * The flow is selected based on the shortest RTT.
- * If all paths have full cong windows, we simply return NULL.
- *
- * Additionally, this function is aware of the backup-subflows.
+/* This is the scheduler.
  */
-struct sock *get_available_subflow(struct sock *meta_sk, struct sk_buff *skb,
+struct sock *get_available_lazy_subflow(struct sock *meta_sk, struct sk_buff *skb,
 				   bool zero_wnd_test)
 {
 	struct mptcp_cb *mpcb = tcp_sk(meta_sk)->mpcb;
 	struct sock *sk;
 	bool force;
+	bool tmp;
 
 	/* if there is only one subflow, bypass the scheduling function */
 	if (mpcb->cnt_subflows == 1) {
 		sk = (struct sock *)mpcb->connection_list;
-		if (!mptcp_is_available(sk, skb, zero_wnd_test)) {
-			if (sk && mptcp_is_temp_unavailable(sk, skb, zero_wnd_test))
-				if (sysctl_mptcp_sched_debug == 2 ||
-				    sysctl_mptcp_sched_debug == 5 ||
-				    sysctl_mptcp_sched_print)
+		if (!mptcp_is_lazy_available(sk, skb, zero_wnd_test)) {
+			if (sk && mptcp_is_lazy_temp_unavailable(sk, skb,
+							    zero_wnd_test,
+							    &tmp))
+				if (debug)
 					mptcp_calc_sched(meta_sk, sk, 1);
 			sk = NULL;
 		}
-		if (sk && (sysctl_mptcp_sched_debug == 2 ||
-			   sysctl_mptcp_sched_debug == 5 ||
-			   sysctl_mptcp_sched_print))
+		if (sk && debug)
 			mptcp_calc_sched(meta_sk, sk, 1);
 		return sk;
 	}
@@ -282,7 +288,7 @@ struct sock *get_available_subflow(struct sock *meta_sk, struct sk_buff *skb,
 	    skb && mptcp_is_data_fin(skb)) {
 		mptcp_for_each_sk(mpcb, sk) {
 			if (tcp_sk(sk)->mptcp->path_index == mpcb->dfin_path_index &&
-			    mptcp_is_available(sk, skb, zero_wnd_test))
+			    mptcp_is_lazy_available(sk, skb, zero_wnd_test))
 				return sk;
 		}
 	}
@@ -308,7 +314,6 @@ struct sock *get_available_subflow(struct sock *meta_sk, struct sk_buff *skb,
 		TCP_SKB_CB(skb)->path_mask = 0;
 	return sk;
 }
-EXPORT_SYMBOL_GPL(get_available_subflow);
 
 static struct sk_buff *mptcp_rcv_buf_optimization(struct sock *sk, int penal)
 {
@@ -316,7 +321,7 @@ static struct sk_buff *mptcp_rcv_buf_optimization(struct sock *sk, int penal)
 	const struct tcp_sock *tp = tcp_sk(sk);
 	struct tcp_sock *tp_it;
 	struct sk_buff *skb_head;
-	struct defsched_priv *dsp = defsched_get_priv(tp);
+	struct lazysched_priv *dsp = lazysched_get_priv(tp);
 
 	if (tp->mpcb->cnt_subflows == 1)
 		return NULL;
@@ -380,7 +385,7 @@ retrans:
 			}
 		}
 
-		if (do_retrans && mptcp_is_available(sk, skb_head, false))
+		if (do_retrans && mptcp_is_lazy_available(sk, skb_head, false))
 			return skb_head;
 	}
 	return NULL;
@@ -415,8 +420,9 @@ static struct sk_buff *__mptcp_next_segment(struct sock *meta_sk, int *reinject)
 		if (!skb && meta_sk->sk_socket &&
 		    test_bit(SOCK_NOSPACE, &meta_sk->sk_socket->flags) &&
 		    sk_stream_wspace(meta_sk) < sk_stream_min_wspace(meta_sk)) {
-			struct sock *subsk = get_available_subflow(meta_sk, NULL,
-								   false);
+			struct sock *subsk = get_available_lazy_subflow(meta_sk,
+								       NULL,
+								       false);
 			if (!subsk)
 				return NULL;
 
@@ -445,7 +451,7 @@ static struct sk_buff *mptcp_next_segment(struct sock *meta_sk,
 	if (!skb)
 		return NULL;
 
-	*subsk = get_available_subflow(meta_sk, skb, false);
+	*subsk = get_available_lazy_subflow(meta_sk, skb, false);
 	if (!*subsk)
 		return NULL;
 
@@ -453,9 +459,7 @@ static struct sk_buff *mptcp_next_segment(struct sock *meta_sk,
 	mss_now = tcp_current_mss(*subsk);
 
 	if (!*reinject && unlikely(!tcp_snd_wnd_test(tcp_sk(meta_sk), skb, mss_now))) {
-		if (sysctl_mptcp_sched_debug == 2 ||
-		    sysctl_mptcp_sched_debug == 5 ||
-		    sysctl_mptcp_sched_print)
+		if (debug)
 			mptcp_calc_sched(meta_sk, *subsk, 5);
 
 		skb = mptcp_rcv_buf_optimization(*subsk, 1);
@@ -498,127 +502,41 @@ static struct sk_buff *mptcp_next_segment(struct sock *meta_sk,
 	return skb;
 }
 
-static void defsched_init(struct sock *sk)
+static void lazysched_init(struct sock *sk)
 {
-	struct defsched_priv *dsp = defsched_get_priv(tcp_sk(sk));
+	struct lazysched_priv *dsp = lazysched_get_priv(tcp_sk(sk));
 
 	dsp->last_rbuf_opti = tcp_time_stamp;
 }
 
-struct mptcp_sched_ops mptcp_sched_default = {
-	.get_subflow = get_available_subflow,
+struct mptcp_sched_ops mptcp_sched_lazy = {
+	.get_subflow = get_available_lazy_subflow,
 	.next_segment = mptcp_next_segment,
-	.init = defsched_init,
-	.name = "default",
+	.init = lazysched_init,
+	.name = "lazy",
 	.owner = THIS_MODULE,
 };
 
-static struct mptcp_sched_ops *mptcp_sched_find(const char *name)
-{
-	struct mptcp_sched_ops *e;
-
-	list_for_each_entry_rcu(e, &mptcp_sched_list, list) {
-		if (strcmp(e->name, name) == 0)
-			return e;
-	}
-
-	return NULL;
-}
-
-int mptcp_register_scheduler(struct mptcp_sched_ops *sched)
-{
-	int ret = 0;
-
-	if (!sched->get_subflow || !sched->next_segment)
-		return -EINVAL;
-
-	spin_lock(&mptcp_sched_list_lock);
-	if (mptcp_sched_find(sched->name)) {
-		pr_notice("%s already registered\n", sched->name);
-		ret = -EEXIST;
-	} else {
-		list_add_tail_rcu(&sched->list, &mptcp_sched_list);
-		pr_info("%s registered\n", sched->name);
-	}
-	spin_unlock(&mptcp_sched_list_lock);
-
-	return ret;
-}
-EXPORT_SYMBOL_GPL(mptcp_register_scheduler);
-
-void mptcp_unregister_scheduler(struct mptcp_sched_ops *sched)
-{
-	spin_lock(&mptcp_sched_list_lock);
-	list_del_rcu(&sched->list);
-	spin_unlock(&mptcp_sched_list_lock);
-}
-EXPORT_SYMBOL_GPL(mptcp_unregister_scheduler);
-
-void mptcp_get_default_scheduler(char *name)
-{
-	struct mptcp_sched_ops *sched;
-
-	BUG_ON(list_empty(&mptcp_sched_list));
-
-	rcu_read_lock();
-	sched = list_entry(mptcp_sched_list.next, struct mptcp_sched_ops, list);
-	strncpy(name, sched->name, MPTCP_SCHED_NAME_MAX);
-	rcu_read_unlock();
-}
-
-int mptcp_set_default_scheduler(const char *name)
-{
-	struct mptcp_sched_ops *sched;
-	int ret = -ENOENT;
-
-	spin_lock(&mptcp_sched_list_lock);
-	sched = mptcp_sched_find(name);
-#ifdef CONFIG_MODULES
-	if (!sched && capable(CAP_NET_ADMIN)) {
-		spin_unlock(&mptcp_sched_list_lock);
-
-		request_module("mptcp_%s", name);
-		spin_lock(&mptcp_sched_list_lock);
-		sched = mptcp_sched_find(name);
-	}
-#endif
-
-	if (sched) {
-		list_move(&sched->list, &mptcp_sched_list);
-		ret = 0;
-	} else {
-		pr_info("%s is not available\n", name);
-	}
-	spin_unlock(&mptcp_sched_list_lock);
-
-	return ret;
-}
-
-void mptcp_init_scheduler(struct mptcp_cb *mpcb)
-{
-	struct mptcp_sched_ops *sched;
-
-	rcu_read_lock();
-	list_for_each_entry_rcu(sched, &mptcp_sched_list, list) {
-		if (try_module_get(sched->owner)) {
-			mpcb->sched_ops = sched;
-			break;
-		}
-	}
-	rcu_read_unlock();
-}
-
-/* Manage refcounts on socket close. */
-void mptcp_cleanup_scheduler(struct mptcp_cb *mpcb)
-{
-	module_put(mpcb->sched_ops->owner);
-}
-
 /* Set default value from kernel configuration at bootup */
-static int __init mptcp_scheduler_default(void)
+static int __init lazysched_register(void)
 {
-	BUILD_BUG_ON(sizeof(struct defsched_priv) > MPTCP_SCHED_SIZE);
+	BUILD_BUG_ON(sizeof(struct lazysched_priv) > MPTCP_SCHED_SIZE);
 
-	return mptcp_set_default_scheduler(CONFIG_DEFAULT_MPTCP_SCHED);
+	if (mptcp_register_scheduler(&mptcp_sched_lazy))
+		return -1;
+
+	return 0;
 }
-late_initcall(mptcp_scheduler_default);
+
+static void lazysched_unregister(void)
+{
+	mptcp_unregister_scheduler(&mptcp_sched_lazy);
+}
+
+module_init(lazysched_register);
+module_exit(lazysched_unregister);
+
+MODULE_AUTHOR("Per Hurtig");
+MODULE_LICENSE("GPL");
+MODULE_DESCRIPTION("LAZY SCHEDULER FOR MPTCP");
+MODULE_VERSION("0.90");

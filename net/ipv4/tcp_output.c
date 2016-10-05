@@ -2191,13 +2191,21 @@ repair:
 		/* Send one loss probe per tail loss episode. */
 		if (push_one != 2)
 			tcp_schedule_loss_probe(sk);
+		if (sysctl_mptcp_orig_cwv) {
+			if (tp->ops->cwnd_validate)
+				tp->ops->cwnd_validate(sk, is_cwnd_limited);
+
+			return false;
+		}
+
 		if (!sysctl_mptcp_exp_scheduling) {
 			if (tp->ops->cwnd_validate)
 				tp->ops->cwnd_validate(sk, is_cwnd_limited);
+			else if (sysctl_mptcp_sched_debug == 1)
+				tcp_cwnd_validate(sk, is_cwnd_limited);
 		} else {
 			tcp_cwnd_validate(sk, is_cwnd_limited);
 		}
-
 		return false;
 	}
 	return (push_one == 2) || (!tp->packets_out && tcp_send_head(sk));
