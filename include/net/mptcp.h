@@ -672,7 +672,6 @@ extern int sysctl_mptcp_fast_connect;
 extern int sysctl_mptcp_sched_debug;
 extern int sysctl_mptcp_sched_cc;
 extern int sysctl_mptcp_sched_print;
-extern int sysctl_mptcp_orig_cwv;
 
 extern struct workqueue_struct *mptcp_wq;
 

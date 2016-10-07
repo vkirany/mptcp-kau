@@ -2109,7 +2109,6 @@ bool tcp_write_xmit(struct sock *sk, unsigned int mss_now, int nonagle,
 
 		cwnd_quota = tcp_cwnd_test(tp, skb);
 		if (!cwnd_quota) {
-			is_cwnd_limited = true;
 			if (push_one == 2)
 				/* Force out a loss probe pkt. */
 				cwnd_quota = 1;
@@ -2191,21 +2190,8 @@ repair:
 		/* Send one loss probe per tail loss episode. */
 		if (push_one != 2)
 			tcp_schedule_loss_probe(sk);
-		if (sysctl_mptcp_orig_cwv) {
-			if (tp->ops->cwnd_validate)
-				tp->ops->cwnd_validate(sk, is_cwnd_limited);
-
-			return false;
-		}
-
-		if (!sysctl_mptcp_exp_scheduling) {
-			if (tp->ops->cwnd_validate)
-				tp->ops->cwnd_validate(sk, is_cwnd_limited);
-			else if (sysctl_mptcp_sched_debug == 1)
-				tcp_cwnd_validate(sk, is_cwnd_limited);
-		} else {
-			tcp_cwnd_validate(sk, is_cwnd_limited);
-		}
+		is_cwnd_limited |= (tcp_packets_in_flight(tp) >= tp->snd_cwnd);
+		tcp_cwnd_validate(sk, is_cwnd_limited);
 		return false;
 	}
 	return (push_one == 2) || (!tp->packets_out && tcp_send_head(sk));

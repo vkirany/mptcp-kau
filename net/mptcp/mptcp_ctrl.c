@@ -99,9 +99,6 @@ EXPORT_SYMBOL(sysctl_mptcp_sched_cc);
 int sysctl_mptcp_sched_print __read_mostly = 0;
 EXPORT_SYMBOL(sysctl_mptcp_sched_print);
 
-int sysctl_mptcp_orig_cwv __read_mostly = 0;
-EXPORT_SYMBOL(sysctl_mptcp_orig_cwv);
-
 bool mptcp_init_failed __read_mostly;
 
 struct static_key mptcp_static_key = STATIC_KEY_INIT_FALSE;
@@ -226,13 +223,6 @@ static struct ctl_table mptcp_table[] = {
 	{
 		.procname = "mptcp_sched_print",
 		.data = &sysctl_mptcp_sched_print,
-		.maxlen = sizeof(int),
-		.mode = 0644,
-		.proc_handler = &proc_dointvec
-	},
-	{
-		.procname = "mptcp_orig_cwv",
-		.data = &sysctl_mptcp_orig_cwv,
 		.maxlen = sizeof(int),
 		.mode = 0644,
 		.proc_handler = &proc_dointvec
