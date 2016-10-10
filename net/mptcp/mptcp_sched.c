@@ -476,6 +476,35 @@ static struct mptcp_sched_ops *mptcp_sched_find(const char *name)
 	return NULL;
 }
 
+// TODO : check if correct
+/* Must be called with rcu lock held */
+static const struct mptcp_sched_ops *__mptcp_sched_find_autoload(const char *name)
+{
+	const struct mptcp_sched_ops *ca = tcp_sched_find(name);
+#ifdef CONFIG_MODULES
+	if (!sched && capable(CAP_NET_ADMIN)) {
+		rcu_read_unlock();
+		request_module("mptcp_%s", name);
+		rcu_read_lock();
+		ca = mptcp_sched_find(name);
+	}
+#endif
+	return ca;
+}
+
+/* Simple linear search, not much in here. */
+struct tcp_congestion_ops *tcp_ca_find_key(u32 key)
+{
+	struct tcp_congestion_ops *e;
+
+	list_for_each_entry_rcu(e, &tcp_cong_list, list) {
+		if (e->key == key)
+			return e;
+	}
+
+	return NULL;
+}
+
 int mptcp_register_scheduler(struct mptcp_sched_ops *sched)
 {
 	int ret = 0;
@@ -505,16 +534,56 @@ void mptcp_unregister_scheduler(struct mptcp_sched_ops *sched)
 }
 EXPORT_SYMBOL_GPL(mptcp_unregister_scheduler);
 
-void mptcp_get_default_scheduler(char *name)
+/* assign choice of scheduler */
+void mptcp_assign_scheduler(struct sock *sk)
 {
+	struct mptcp_cb *mpcb = tcp_sk(sk)->mpcb;
 	struct mptcp_sched_ops *sched;
 
-	BUG_ON(list_empty(&mptcp_sched_list));
-
 	rcu_read_lock();
-	sched = list_entry(mptcp_sched_list.next, struct mptcp_sched_ops, list);
-	strncpy(name, sched->name, MPTCP_SCHED_NAME_MAX);
+	list_for_each_entry_rcu(sched, &mptcp_sched_list, list) {
+		if (likely(try_module_get(sched->owner))) {
+			mpcb->sched_ops = sched;
+			goto out;
+		}
+	}
+out:
 	rcu_read_unlock();
+
+	// TODO : if problems occur, remove old priv-data.
+}
+
+void mptcp_init_scheduler(struct sock *sk)
+{
+	const struct mptcp_cb *mpcb = tcp_sk(sk)->mpcb;
+
+	if (mpcb->mptcp_sched_ops->init)
+		mpcb->mptcp_sched_ops->init(sk);
+}
+
+static void mptcp_reinit_scheduler(struct sock *sk,
+				   const struct mptcp_sched_ops *sched)
+{
+	struct mptcp_cb *mpcb = tcp_sk(sk)->mpcb;
+
+	mptcp_cleanup_scheduler(sk);
+	mpcb->sched_ops = sched;
+	// check if below is needed, minisock?
+	//mpcb->sched_ops_setsockopt = 1;
+
+	// TODO : check necessary conditions
+	if (sk->sk_state != TCP_CLOSE && mpcb->sched_ops->init)
+		mpcb->sched_ops->init(sk);
+}
+
+/* Manage refcounts on socket close. */
+void mptcp_cleanup_scheduler(struct sock *sk)
+{
+	struct mptcp_cb *mpcb = tcp_sk(sk)->mpcb;
+
+	if (mpcb->mptcp_sched_ops->release)
+		mpcb->mptcp_sched_ops->release(sk);
+	module_put(mpcb->sched_ops->owner);
 }
 
 int mptcp_set_default_scheduler(const char *name)
@@ -545,26 +614,6 @@ int mptcp_set_default_scheduler(const char *name)
 	return ret;
 }
 
-void mptcp_init_scheduler(struct mptcp_cb *mpcb)
-{
-	struct mptcp_sched_ops *sched;
-
-	rcu_read_lock();
-	list_for_each_entry_rcu(sched, &mptcp_sched_list, list) {
-		if (try_module_get(sched->owner)) {
-			mpcb->sched_ops = sched;
-			break;
-		}
-	}
-	rcu_read_unlock();
-}
-
-/* Manage refcounts on socket close. */
-void mptcp_cleanup_scheduler(struct mptcp_cb *mpcb)
-{
-	module_put(mpcb->sched_ops->owner);
-}
-
 /* Set default value from kernel configuration at bootup */
 static int __init mptcp_scheduler_default(void)
 {
@@ -573,3 +622,50 @@ static int __init mptcp_scheduler_default(void)
 	return mptcp_set_default_scheduler(CONFIG_DEFAULT_MPTCP_SCHED);
 }
 late_initcall(mptcp_scheduler_default);
+
+void mptcp_get_default_scheduler(char *name)
+{
+	struct mptcp_sched_ops *sched;
+
+	BUG_ON(list_empty(&mptcp_sched_list));
+
+	rcu_read_lock();
+	sched = list_entry(mptcp_sched_list.next, struct mptcp_sched_ops, list);
+	strncpy(name, sched->name, MPTCP_SCHED_NAME_MAX);
+	rcu_read_unlock();
+}
+
+/* Change scheduler for socket */
+int mptcp_set_scheduler(struct sock *sk, const char *name)
+{
+	struct mptcp_cb *mpcb = tcp_sk(sk)->mpcb;
+	const struct mptcp_sched_ops *sched;
+	int err = 0;
+
+	rcu_read_lock();
+	sched = __mptcp_sched_find_autoload(name);
+	/* No change asking for existing value */
+	if (sched == mpcb->mptcp_sched_ops) {
+		// check if below is needed, minisocks?
+		//mpcb->sched_ops_setsockopt = 1;
+		goto out;
+	}
+	if (!sched)
+		err = -ENOENT;
+	else if(!ns_capable(sock_net(sk)->user_ns, CAP_NET_ADMIN))
+		err = -EPERM;
+	else if (!try_module_get(sched->owner))
+		err = -EBUSY;
+	else
+		mptcp_reinit_scheduler(sk, sched);
+out:
+	rcu_read_unlock();
+	return err;
+}
+
+
+
+
+
+
+
