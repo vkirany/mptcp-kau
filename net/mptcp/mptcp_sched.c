@@ -480,29 +480,16 @@ static struct mptcp_sched_ops *mptcp_sched_find(const char *name)
 /* Must be called with rcu lock held */
 static const struct mptcp_sched_ops *__mptcp_sched_find_autoload(const char *name)
 {
-	const struct mptcp_sched_ops *ca = tcp_sched_find(name);
+	const struct mptcp_sched_ops *sched = mptcp_sched_find(name);
 #ifdef CONFIG_MODULES
 	if (!sched && capable(CAP_NET_ADMIN)) {
 		rcu_read_unlock();
 		request_module("mptcp_%s", name);
 		rcu_read_lock();
-		ca = mptcp_sched_find(name);
+		sched = mptcp_sched_find(name);
 	}
 #endif
-	return ca;
-}
-
-/* Simple linear search, not much in here. */
-struct tcp_congestion_ops *tcp_ca_find_key(u32 key)
-{
-	struct tcp_congestion_ops *e;
-
-	list_for_each_entry_rcu(e, &tcp_cong_list, list) {
-		if (e->key == key)
-			return e;
-	}
-
-	return NULL;
+	return sched;
 }
 
 int mptcp_register_scheduler(struct mptcp_sched_ops *sched)
@@ -557,12 +544,12 @@ void mptcp_init_scheduler(struct sock *sk)
 {
 	const struct mptcp_cb *mpcb = tcp_sk(sk)->mpcb;
 
-	if (mpcb->mptcp_sched_ops->init)
-		mpcb->mptcp_sched_ops->init(sk);
+	if (mpcb->sched_ops->init)
+		mpcb->sched_ops->init(sk);
 }
 
 static void mptcp_reinit_scheduler(struct sock *sk,
-				   const struct mptcp_sched_ops *sched)
+				   struct mptcp_sched_ops *sched)
 {
 	struct mptcp_cb *mpcb = tcp_sk(sk)->mpcb;
 
@@ -581,8 +568,8 @@ void mptcp_cleanup_scheduler(struct sock *sk)
 {
 	struct mptcp_cb *mpcb = tcp_sk(sk)->mpcb;
 
-	if (mpcb->mptcp_sched_ops->release)
-		mpcb->mptcp_sched_ops->release(sk);
+	if (mpcb->sched_ops->release)
+		mpcb->sched_ops->release(sk);
 	module_put(mpcb->sched_ops->owner);
 }
 
@@ -645,7 +632,7 @@ int mptcp_set_scheduler(struct sock *sk, const char *name)
 	rcu_read_lock();
 	sched = __mptcp_sched_find_autoload(name);
 	/* No change asking for existing value */
-	if (sched == mpcb->mptcp_sched_ops) {
+	if (sched == mpcb->sched_ops) {
 		// check if below is needed, minisocks?
 		//mpcb->sched_ops_setsockopt = 1;
 		goto out;

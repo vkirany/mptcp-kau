@@ -632,9 +632,11 @@ static void mptcp_sock_def_error_report(struct sock *sk)
 
 static void mptcp_mpcb_put(struct mptcp_cb *mpcb)
 {
+	struct sock *meta_sk = mpcb->meta_sk;
+
 	if (atomic_dec_and_test(&mpcb->mpcb_refcnt)) {
 		mptcp_cleanup_path_manager(mpcb);
-		mptcp_cleanup_scheduler(mpcb);
+		mptcp_cleanup_scheduler(meta_sk);
 		kmem_cache_free(mptcp_cb_cache, mpcb);
 	}
 }
@@ -1204,7 +1206,7 @@ static int mptcp_alloc_mpcb(struct sock *meta_sk, __u64 remote_key,
 	atomic_set(&mpcb->mpcb_refcnt, 1);
 
 	mptcp_init_path_manager(mpcb);
-	mptcp_init_scheduler(mpcb);
+	mptcp_init_scheduler(meta_sk);
 
 	if (!try_module_get(inet_csk(master_sk)->icsk_ca_ops->owner))
 		tcp_assign_congestion_control(master_sk);
