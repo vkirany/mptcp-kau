@@ -478,9 +478,9 @@ static struct mptcp_sched_ops *mptcp_sched_find(const char *name)
 
 // TODO : check if correct
 /* Must be called with rcu lock held */
-static const struct mptcp_sched_ops *__mptcp_sched_find_autoload(const char *name)
+static struct mptcp_sched_ops *__mptcp_sched_find_autoload(const char *name)
 {
-	const struct mptcp_sched_ops *sched = mptcp_sched_find(name);
+	struct mptcp_sched_ops *sched = mptcp_sched_find(name);
 #ifdef CONFIG_MODULES
 	if (!sched && capable(CAP_NET_ADMIN)) {
 		rcu_read_unlock();
@@ -542,7 +542,7 @@ out:
 
 void mptcp_init_scheduler(struct sock *sk)
 {
-	const struct mptcp_cb *mpcb = tcp_sk(sk)->mpcb;
+	struct mptcp_cb *mpcb = tcp_sk(sk)->mpcb;
 
 	if (mpcb->sched_ops->init)
 		mpcb->sched_ops->init(sk);
@@ -559,6 +559,7 @@ static void mptcp_reinit_scheduler(struct sock *sk,
 	//mpcb->sched_ops_setsockopt = 1;
 
 	// TODO : check necessary conditions
+	printk(KERN_WARNING "Trying to init new scheduler...\n");
 	if (sk->sk_state != TCP_CLOSE && mpcb->sched_ops->init)
 		mpcb->sched_ops->init(sk);
 }
@@ -625,8 +626,9 @@ void mptcp_get_default_scheduler(char *name)
 /* Change scheduler for socket */
 int mptcp_set_scheduler(struct sock *sk, const char *name)
 {
-	struct mptcp_cb *mpcb = tcp_sk(sk)->mpcb;
-	const struct mptcp_sched_ops *sched;
+	struct sock *meta_sk = mptcp_meta_sk(sk);
+	struct mptcp_cb *mpcb = tcp_sk(meta_sk)->mpcb;
+	struct mptcp_sched_ops *sched;
 	int err = 0;
 
 	rcu_read_lock();
@@ -635,16 +637,19 @@ int mptcp_set_scheduler(struct sock *sk, const char *name)
 	if (sched == mpcb->sched_ops) {
 		// check if below is needed, minisocks?
 		//mpcb->sched_ops_setsockopt = 1;
+		printk(KERN_WARNING "choosing same scheduler...\n");
 		goto out;
 	}
 	if (!sched)
 		err = -ENOENT;
-	else if(!ns_capable(sock_net(sk)->user_ns, CAP_NET_ADMIN))
+	else if(!ns_capable(sock_net(meta_sk)->user_ns, CAP_NET_ADMIN))
 		err = -EPERM;
 	else if (!try_module_get(sched->owner))
 		err = -EBUSY;
-	else
-		mptcp_reinit_scheduler(sk, sched);
+	else {
+		printk(KERN_WARNING "choosing new scheduler...\n");
+		mptcp_reinit_scheduler(meta_sk, sched);
+	}
 out:
 	rcu_read_unlock();
 	return err;

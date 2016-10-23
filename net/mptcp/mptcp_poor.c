@@ -405,6 +405,10 @@ static void poorsched_init(struct sock *sk)
 {
 	struct poorsched_priv *dsp = poorsched_get_priv(tcp_sk(sk));
 
+	printk(KERN_WARNING "trying to init poor scheduler...\n");
+	if (!dsp)
+		printk(KERN_WARNING "very strange, dsp null...\n");
+
 	dsp->last_rbuf_opti = tcp_time_stamp;
 }
 
