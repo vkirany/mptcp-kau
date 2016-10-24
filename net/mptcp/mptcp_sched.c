@@ -522,9 +522,8 @@ void mptcp_unregister_scheduler(struct mptcp_sched_ops *sched)
 EXPORT_SYMBOL_GPL(mptcp_unregister_scheduler);
 
 /* assign choice of scheduler */
-void mptcp_assign_scheduler(struct sock *sk)
+void mptcp_assign_scheduler(struct mptcp_cb *mpcb)
 {
-	struct mptcp_cb *mpcb = tcp_sk(sk)->mpcb;
 	struct mptcp_sched_ops *sched;
 
 	rcu_read_lock();
@@ -540,13 +539,13 @@ out:
 	// TODO : if problems occur, remove old priv-data.
 }
 
-void mptcp_init_scheduler(struct sock *sk)
+/*void mptcp_init_scheduler(struct sock *sk)
 {
 	struct mptcp_cb *mpcb = tcp_sk(sk)->mpcb;
 
 	if (mpcb->sched_ops->init)
 		mpcb->sched_ops->init(sk);
-}
+}*/
 
 static void mptcp_reinit_scheduler(struct sock *sk,
 				   struct mptcp_sched_ops *sched)
@@ -559,9 +558,9 @@ static void mptcp_reinit_scheduler(struct sock *sk,
 	//mpcb->sched_ops_setsockopt = 1;
 
 	// TODO : check necessary conditions
-	printk(KERN_WARNING "Trying to init new scheduler...\n");
+	/*printk(KERN_WARNING "Trying to init new scheduler...\n");
 	if (sk->sk_state != TCP_CLOSE && mpcb->sched_ops->init)
-		mpcb->sched_ops->init(sk);
+		mpcb->sched_ops->init(sk);*/
 }
 
 /* Manage refcounts on socket close. */

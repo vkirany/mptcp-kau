@@ -1206,8 +1206,7 @@ static int mptcp_alloc_mpcb(struct sock *meta_sk, __u64 remote_key,
 	atomic_set(&mpcb->mpcb_refcnt, 1);
 
 	mptcp_init_path_manager(mpcb);
-	mptcp_assign_scheduler(meta_sk);
-	mptcp_init_scheduler(meta_sk);
+	mptcp_assign_scheduler(mpcb);
 
 	if (!try_module_get(inet_csk(master_sk)->icsk_ca_ops->owner))
 		tcp_assign_congestion_control(master_sk);
