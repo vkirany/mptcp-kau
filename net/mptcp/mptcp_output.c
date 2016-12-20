@@ -1586,6 +1586,25 @@ void mptcp_sub_retransmit_timer(struct sock *sk)
 	}
 }
 
+
+void mptcp_sub_send_loss_probe(struct sock *sk)
+{
+	struct tcp_sock *tp = tcp_sk(sk);
+	
+	tcp_send_loss_probe(sk);
+	
+	if(!tp->fastopen_rsk){
+		if (tcp_send_head(sk)) {
+		}
+		else
+		{
+		}
+	}
+
+
+
+}
+
 /* Modify values to an mptcp-level for the initial window of new subflows */
 void mptcp_select_initial_window(int __space, __u32 mss, __u32 *rcv_wnd,
 				__u32 *window_clamp, int wscale_ok,
