@@ -1587,23 +1587,105 @@ void mptcp_sub_retransmit_timer(struct sock *sk)
 }
 
 
+/* Send Loss Probe */
+
 void mptcp_sub_send_loss_probe(struct sock *sk)
 {
-	struct tcp_sock *tp = tcp_sk(sk);
-	
-	tcp_send_loss_probe(sk);
-	
-	if(!tp->fastopen_rsk){
-		if (tcp_send_head(sk)) {
-		}
-		else
-		{
-		}
-	}
+        struct sock *meta_sk = mptcp_meta_sk(sk);
+        struct tcp_sock *tp = tcp_sk(sk);
+        struct sk_buff *skb_head, *skb_tail;
+        struct mptcp_cb *mpcb = tp->mpcb;
+        struct mptcp_tcp_sock *mptcp = tcp_sk(sk)->mptcp;
+        struct sock *nsk = (struct sock *)mptcp->next;
+        int pcount;
+        int mss = tcp_current_mss(sk);
+        int err = -1;
+
+        tcp_send_loss_probe(sk);
+
+        /* Check for number of subflows. */
+        if (mpcb->cnt_subflows == 1)
+                return NULL;
+
+        if(!tp->fastopen_rsk){
+
+                if(tcp_send_head(sk))   {
+                        printk("Send first available packet");
+                        skb_head = tcp_write_queue_head(meta_sk);
+                        if (WARN_ON(!skb_head))
+                                goto rearm_timer;
+                        /* Not sure if there will be more segments: Is it better to check packets_out or skip */
+                        pcount = tcp_skb_pcount(skb_head);
+                        if (WARN_ON(!pcount))
+                                goto rearm_timer;
+
+                        if ((pcount > 1) && (skb_head->len > (pcount - 1) * mss)) {
+                                if (unlikely(tcp_fragment(nsk, skb_head, (pcount - 1) * mss, mss,
+                                          GFP_ATOMIC)))
+                                goto rearm_timer;
+                            skb_head = tcp_write_queue_tail(mptcp->next);
+                        }
+
+                         if (WARN_ON(!skb_head || !tcp_skb_pcount(skb_head)))
+                                goto rearm_timer;
+
+                        err = __tcp_retransmit_skb(nsk, skb_head);
+
+                         /* Record snd_nxt for loss detection. */
+                        if (likely(!err))
+                                nsk->tlp_high_seq = nsk->snd_nxt;
+
+
+                }else
+                {
+                        skb_tail=tcp_write_queue_tail(meta_sk);
+                        printk("Send last transmitted packet");
+                        if (WARN_ON(!skb_tail))
+                                goto rearm_timer;
+                        /* Not sure if there will be more segments: Is it better to check packets_out or skip */
+                        pcount = tcp_skb_pcount(skb_tail);
+                        if (WARN_ON(!pcount))
+                                goto rearm_timer;
+
+                        if ((pcount > 1) && (skb_tail->len > (pcount - 1) * mss)) {
+				if (unlikely(tcp_fragment(nsk, skb_tail, (pcount - 1) * mss, mss,
+                                          GFP_ATOMIC)))
+                                goto rearm_timer;
+                            skb_tail = tcp_write_queue_tail(mptcp->next);
+                        }
+
+                         if (WARN_ON(!skb_tail || !tcp_skb_pcount(skb_tail)))
+                                goto rearm_timer;
+
+                        err = __tcp_retransmit_skb(nsk, skb_tail);
+
+                         /* Record snd_nxt for loss detection. */
+                        if (likely(!err))
+                                nsk->tlp_high_seq = nsk->snd_nxt;
+
+                }
+        }
+
+
+rearm_timer:
+        inet_csk_reset_xmit_timer(nsk, ICSK_TIME_RETRANS,
+                                  inet_csk(nsk)->icsk_rto,
+                                  TCP_RTO_MAX);
+
+        if (likely(!err))
+                NET_INC_STATS_BH(sock_net(nsk),
+                                 LINUX_MIB_TCPLOSSPROBES);
 
 
 
 }
+
+
+
+
+
+
+
 
 /* Modify values to an mptcp-level for the initial window of new subflows */
 void mptcp_select_initial_window(int __space, __u32 mss, __u32 *rcv_wnd,
