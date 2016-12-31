@@ -1605,7 +1605,7 @@ void mptcp_sub_send_loss_probe(struct sock *sk)
 
         /* Check for number of subflows. */
         if (mpcb->cnt_subflows == 1)
-                return NULL;
+                return;
 
         if(!tp->fastopen_rsk){
 
@@ -1623,7 +1623,7 @@ void mptcp_sub_send_loss_probe(struct sock *sk)
                                 if (unlikely(tcp_fragment(nsk, skb_head, (pcount - 1) * mss, mss,
                                           GFP_ATOMIC)))
                                 goto rearm_timer;
-                            skb_head = tcp_write_queue_tail(mptcp->next);
+                            skb_head = tcp_write_queue_tail(nsk);
                         }
 
                          if (WARN_ON(!skb_head || !tcp_skb_pcount(skb_head)))
@@ -1633,7 +1633,7 @@ void mptcp_sub_send_loss_probe(struct sock *sk)
 
                          /* Record snd_nxt for loss detection. */
                         if (likely(!err))
-                                nsk->tlp_high_seq = nsk->snd_nxt;
+                                tcp_sk(nsk)->tlp_high_seq = tcp_sk(nsk)->snd_nxt;
 
 
                 }else
@@ -1651,7 +1651,7 @@ void mptcp_sub_send_loss_probe(struct sock *sk)
 				if (unlikely(tcp_fragment(nsk, skb_tail, (pcount - 1) * mss, mss,
                                           GFP_ATOMIC)))
                                 goto rearm_timer;
-                            skb_tail = tcp_write_queue_tail(mptcp->next);
+                            skb_tail = tcp_write_queue_tail(nsk);
                         }
 
                          if (WARN_ON(!skb_tail || !tcp_skb_pcount(skb_tail)))
@@ -1661,7 +1661,7 @@ void mptcp_sub_send_loss_probe(struct sock *sk)
 
                          /* Record snd_nxt for loss detection. */
                         if (likely(!err))
-                                nsk->tlp_high_seq = nsk->snd_nxt;
+                                tcp_sk(nsk)->tlp_high_seq = tcp_sk(nsk)->snd_nxt;
 
                 }
         }
