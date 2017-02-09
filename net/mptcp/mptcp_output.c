@@ -1591,91 +1591,60 @@ void mptcp_sub_retransmit_timer(struct sock *sk)
 
 void mptcp_sub_send_loss_probe(struct sock *sk)
 {
-        struct sock *meta_sk = mptcp_meta_sk(sk);
+ struct sock *meta_sk = mptcp_meta_sk(sk);
+        struct sk_buff *skb_tlp;
         struct tcp_sock *tp = tcp_sk(sk);
-        struct sk_buff *skb_head, *skb_tail;
-        struct mptcp_cb *mpcb = tp->mpcb;
-        struct mptcp_tcp_sock *mptcp = tcp_sk(sk)->mptcp;
-        struct sock *nsk = (struct sock *)mptcp->next;
-        int pcount;
-        int mss = tcp_current_mss(sk);
-        int err = -1;
+        struct sk_buff *skb_it, *tmp;
 
-        tcp_send_loss_probe(sk);
+        printk("Enter MPTCP Send_loss_probe");
+        /* START OF NEW TLP */
+        if (tcp_send_head(sk)) {
+                printk("Send first available packet");
+                skb_tlp = tcp_write_queue_head(sk);
+                __mptcp_reinject_data(skb_tlp, meta_sk, sk, 1);
+        } else {
 
-        /* Check for number of subflows. */
-        if (mpcb->cnt_subflows == 1)
-                return;
+                printk("Send all transmitted packets");
+                /*      skb_tlp = tcp_write_queue_tail(sk); */
+                     /* It has already been closed - there is really no point in reinjecting */
+                        if (meta_sk->sk_state == TCP_CLOSE)
+                                return;
 
-        if(!tp->fastopen_rsk){
+                 skb_queue_walk_safe(&sk->sk_write_queue, skb_it, tmp) {
+                        struct tcp_skb_cb *tcb = TCP_SKB_CB(skb_it);
 
-                if(tcp_send_head(sk))   {
-                        printk("Send first available packet");
-                        skb_head = tcp_write_queue_head(meta_sk);
-                        if (WARN_ON(!skb_head))
-                                goto rearm_timer;
-                        /* Not sure if there will be more segments: Is it better to check packets_out or skip */
-                        pcount = tcp_skb_pcount(skb_head);
-                        if (WARN_ON(!pcount))
-                                goto rearm_timer;
+                        /* Break if skb_it is head as there are no outstanding segments */
+                        if(skb_it==sk->sk_send_head)
+                            break;
 
-                        if ((pcount > 1) && (skb_head->len > (pcount - 1) * mss)) {
-                                if (unlikely(tcp_fragment(nsk, skb_head, (pcount - 1) * mss, mss,
-                                          GFP_ATOMIC)))
-                                goto rearm_timer;
-                            skb_head = tcp_write_queue_tail(nsk);
-                        }
+                        /* Subflow syn's and fin's are not reinjected.
+                        *
+                        * As well as empty subflow-fins with a data-fin.
+                        * They are reinjected below (without the subflow-fin-flag)
+                        */
+                        if (tcb->tcp_flags & TCPHDR_SYN ||
+                                (tcb->tcp_flags & TCPHDR_FIN && !mptcp_is_data_fin(skb_it)) ||
+                                (tcb->tcp_flags & TCPHDR_FIN && mptcp_is_data_fin(skb_it) && !skb_it->len))
+                                continue;
 
-                         if (WARN_ON(!skb_head || !tcp_skb_pcount(skb_head)))
-                                goto rearm_timer;
+                        if (mptcp_is_reinjected(skb_it))
+                                continue;
 
-                        err = __tcp_retransmit_skb(nsk, skb_head);
+                        tcb->mptcp_flags |= MPTCP_REINJECT;
+                        __mptcp_reinject_data(skb_it, meta_sk, sk, 1);
+                }
 
-                         /* Record snd_nxt for loss detection. */
-                        if (likely(!err))
-                                tcp_sk(nsk)->tlp_high_seq = tcp_sk(nsk)->snd_nxt;
-
-
-                }else
-                {
-                        skb_tail=tcp_write_queue_tail(meta_sk);
-                        printk("Send last transmitted packet");
-                        if (WARN_ON(!skb_tail))
-                                goto rearm_timer;
-                        /* Not sure if there will be more segments: Is it better to check packets_out or skip */
-                        pcount = tcp_skb_pcount(skb_tail);
-                        if (WARN_ON(!pcount))
-                                goto rearm_timer;
-
-                        if ((pcount > 1) && (skb_tail->len > (pcount - 1) * mss)) {
-				if (unlikely(tcp_fragment(nsk, skb_tail, (pcount - 1) * mss, mss,
-                                          GFP_ATOMIC)))
-                                goto rearm_timer;
-                            skb_tail = tcp_write_queue_tail(nsk);
-                        }
-
-                         if (WARN_ON(!skb_tail || !tcp_skb_pcount(skb_tail)))
-                                goto rearm_timer;
-
-                        err = __tcp_retransmit_skb(nsk, skb_tail);
-
-                         /* Record snd_nxt for loss detection. */
-                        if (likely(!err))
-                                tcp_sk(nsk)->tlp_high_seq = tcp_sk(nsk)->snd_nxt;
-
+                skb_it = tcp_write_queue_tail(meta_sk);
+                /* If sk has sent the empty data-fin, we have to reinject it too. */
+                if (skb_it && mptcp_is_data_fin(skb_it) && skb_it->len == 0 &&
+                        TCP_SKB_CB(skb_it)->path_mask & mptcp_pi_to_flag(tp->mptcp->path_index)) {
+                        __mptcp_reinject_data(skb_it, meta_sk, NULL, 1);
                 }
         }
 
-
-rearm_timer:
-        inet_csk_reset_xmit_timer(nsk, ICSK_TIME_RETRANS,
-                                  inet_csk(nsk)->icsk_rto,
-                                  TCP_RTO_MAX);
-
-        if (likely(!err))
-                NET_INC_STATS_BH(sock_net(nsk),
-                                 LINUX_MIB_TCPLOSSPROBES);
-
+        tcp_send_loss_probe(sk);
+        mptcp_push_pending_frames(meta_sk);
+        /* END OF NEW TLP */
 
 
 }
