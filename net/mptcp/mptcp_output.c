@@ -1643,7 +1643,10 @@ void mptcp_sub_send_loss_probe(struct sock *sk)
         }
 
         tcp_send_loss_probe(sk);
+	/* Avoid using the same flow by treating as potential path failure for that flow */
+	tp->pf = 1;
         mptcp_push_pending_frames(meta_sk);
+	tp->pf = 0;
         /* END OF NEW TLP */
 
 
