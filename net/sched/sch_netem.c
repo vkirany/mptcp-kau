@@ -24,12 +24,20 @@
 #include <linux/rtnetlink.h>
 #include <linux/reciprocal_div.h>
 #include <linux/rbtree.h>
+#include <linux/hrtimer.h>
 
 #include <net/netlink.h>
 #include <net/pkt_sched.h>
 #include <net/inet_ecn.h>
 
 #define VERSION "1.3"
+
+static bool kdebug __read_mostly = 1;
+module_param(kdebug, bool, 0644);
+MODULE_PARM_DESC(kdebug, "debug kaunetem");
+
+#define __knetdbg(fmt) "[KauNetEm] %s:%d:: " fmt, __FUNCTION__, __LINE__
+#define knetdbg(fmt, args...) if (kdebug) printk(KERN_WARNING __knetdbg(fmt), ## args)
 
 /*	Network Emulation Queuing algorithm.
 	====================================
@@ -84,6 +92,7 @@ struct netem_sched_data {
 	u32 ecn;
 	u32 limit;
 	u32 counter;
+	u32 fwmark;
 	u32 gap;
 	u32 duplicate;
 	u32 reorder;
@@ -108,6 +117,7 @@ struct netem_sched_data {
 		CLG_RANDOM,
 		CLG_4_STATES,
 		CLG_GILB_ELL,
+		CLG_PATTERN,
 	} loss_model;
 
 	enum {
@@ -135,6 +145,32 @@ struct netem_sched_data {
 		u32 a5; /* p23 used only in 4-states */
 	} clg;
 
+	struct kaunet_pattern {
+#define PTN_ENDVAL		0xc000
+#define PTN_ENDVAL_LOSS		0x0000
+
+#define PTN_TIME_DELTA		(1000*1000)
+#define PTN_TIME_TO_USEC(msec)	(((u64)msec) * 1000)
+#define USEC_TO_PTN_TIME(usec)	(((u64)usec) / 1000)
+#define PTN_TIME_TO_NSEC(msec)	(((u64)msec) * 1000 * 1000)
+#define PTN_TIMEOUT		(10)
+
+		u16 type;			/* type of pattern */
+		u16 dist;			/* distance to next event */
+
+		union {
+			int old_lm;		/* old loss model */
+			bool dflt;		/* always default behavior */
+		} ptn_priv;
+
+		struct disttable *ptn_data;	/* pattern data */
+		u32 pos;			/* current pattern position */
+
+		struct hrtimer ptn_timer;
+		struct hrtimer reo_timer;
+
+		struct sk_buff_head reorder_queue;
+	} ptn;
 };
 
 /* Time stamp put into socket buffer control block
@@ -145,8 +181,15 @@ struct netem_sched_data {
  * we save skb->tstamp value in skb->cb[] before destroying it.
  */
 struct netem_skb_cb {
-	psched_time_t	time_to_send;
-	ktime_t		tstamp_save;
+	union {
+		struct {
+			psched_time_t	time_to_send;
+			ktime_t		tstamp_save;
+		};
+		struct {
+			u64		reo_len;
+		};
+	};
 };
 
 
@@ -280,6 +323,176 @@ static bool loss_gilb_ell(struct netem_sched_data *q)
 	return false;
 }
 
+static psched_tdiff_t time2tick(u64 time)
+{
+	return time * NSEC_PER_USEC/PSCHED_TICKS2NS(1);
+}
+
+static psched_tdiff_t tick2time(u64 tick)
+{
+	return tick * PSCHED_TICKS2NS(1)/NSEC_PER_USEC;
+}
+
+static inline u16 ptn_get(struct kaunet_pattern *p)
+{
+	return p->ptn_data->table[p->pos];
+}
+
+static inline bool ptn_is_value(u64 ptn_data)
+{
+	return (ptn_data & (1 << 15));
+}
+
+static inline u16 ptn_extract_dist(u64 ptn_data)
+{
+	return (ptn_data & 0x7fff);
+}
+
+static void ptn_init(struct kaunet_pattern *p)
+{
+	if (p->type & (PTN_EFFECT_LOSS | PTN_EFFECT_DUP)) {
+		/* action patterns always begin with a single distance and
+		 * no action. So, pre-load the distance.
+		 */
+		p->dist = ptn_extract_dist(ptn_get(p));
+	}
+}
+
+static bool ptn_has_ended(struct kaunet_pattern *p)
+{
+	if (p->type & (PTN_EFFECT_LOSS | PTN_EFFECT_DUP))
+		if (ptn_get(p) == PTN_ENDVAL_LOSS)
+			return true;
+
+	return ptn_get(p) == PTN_ENDVAL;
+}
+
+static u64 ptn_encfloat_to_int(u16 enc)
+{
+	u16 exp, mant, expcomp;
+	long int val = 1;
+	long int divisor = 10;
+
+	exp = enc >> 11;
+	exp = exp & 0xF;
+	mant = enc & 0x07FF;
+
+	for (expcomp = 0; mant / divisor >= 1; expcomp++)
+		divisor *= 10;
+
+	for (; exp - expcomp > 0; exp--)
+		val *= 10;
+
+	val = val * mant;
+
+	return val;
+}
+
+static bool ptn_action(struct kaunet_pattern *p, u16 type, bool dflt)
+{
+	bool action = dflt;
+
+	if (!(p->type & type) || ptn_has_ended(p) || p->dist)
+		return action;
+
+	/* get action */
+	action = (ptn_get(p) & 0x8000) == 0x8000;
+
+	/* if data-driven pattern, get distance to next action */
+	if (p->type & PTN_MODE_DATA) {
+		p->pos++;
+		p->dist = ptn_extract_dist(ptn_get(p));
+	}
+
+	/* force default behavior */
+	if (p->ptn_priv.dflt)
+		return dflt;
+
+	return action;
+
+}
+
+static u64 ptn_value(struct kaunet_pattern *p, u16 type, u64 dflt)
+{
+	u64 val = dflt;
+	u64 tmp, dist = 0;
+
+	if (!(p->type & type) || ptn_has_ended(p) || p->dist)
+		return val;
+
+	tmp = ptn_get(p);
+
+	if (ptn_is_value(tmp)) {
+		if (p->type & PTN_EFFECT_ERROR)
+			val = tmp & 0x3fff;
+		else
+			val = ptn_encfloat_to_int(tmp);
+		p->pos++;
+	}
+	else
+		dist = tmp - 1;
+
+	if (p->type & PTN_MODE_DATA)
+		p->dist = dist ? dist : p->dist;
+
+	/* force default behavior */
+	if (p->ptn_priv.dflt)
+		return dflt;
+
+	return val;
+}
+
+static bool ptn_exists(struct kaunet_pattern *p)
+{
+	if (!p)
+		return false;
+	if (!p->type)
+		return false;
+
+	return true;
+}
+
+static void ptn_start_timer(struct kaunet_pattern *p)
+{
+	if ((p->type & PTN_MODE_TIME) &&
+	    !hrtimer_active(&p->ptn_timer) &&
+	    !ptn_has_ended(p)) {
+		hrtimer_start(&p->ptn_timer, ktime_set(0,1), HRTIMER_MODE_REL);
+		if (!hrtimer_active(&p->ptn_timer))
+			knetdbg("pattern timer did not start\n");
+	}
+}
+
+/*
+ * Advances one position in data-driven patterns, no effect for time-driven.
+ *
+ * returns false if pattern has ended or no new value is present.
+ */
+static void ptn_advance(struct kaunet_pattern *p)
+{
+	if (ptn_has_ended(p))
+		return;
+
+	if (p->type & PTN_MODE_TIME)
+		return;
+
+	/* forward pattern one step */
+	/* TODO: rewrite as p->dist-- > 0 return; */
+	if (p->dist > 0)
+		p->dist--;
+	if (p->dist > 0)
+		return;
+
+	if (!p->dist) {
+		bool action_patt = p->type &
+				   (PTN_EFFECT_LOSS | PTN_EFFECT_DUP);
+		if (!action_patt && !(ptn_is_value(ptn_get(p)))) {
+			p->dist = ptn_get(p);
+			p->pos++;
+		}
+	}
+}
+
 static bool loss_event(struct netem_sched_data *q)
 {
 	switch (q->loss_model) {
@@ -302,6 +515,9 @@ static bool loss_event(struct netem_sched_data *q)
 		* the kernel logs
 		*/
 		return loss_gilb_ell(q);
+
+	case CLG_PATTERN:
+		return (ptn_exists(&q->ptn) && ptn_action(&q->ptn, PTN_EFFECT_LOSS, false));
 	}
 
 	return false;	/* not reached */
@@ -408,9 +624,19 @@ static int netem_enqueue(struct sk_buff *skb, struct Qdisc *sch)
 	struct netem_skb_cb *cb;
 	struct sk_buff *skb2;
 	int count = 1;
+	u16 tmp_bits = 0;
+
+	if (q->fwmark > 0 && q->fwmark != skb->mark)
+		goto kaunetem_out;
+
+	if (ptn_exists(&q->ptn)) {
+		ptn_start_timer(&q->ptn);	/* start time-driven pattern */
+		ptn_advance(&q->ptn);		/* advance data-driven pattern */
+	}
 
 	/* Random duplication */
-	if (q->duplicate && q->duplicate >= get_crandom(&q->dup_cor))
+	if ((q->duplicate && q->duplicate >= get_crandom(&q->dup_cor)) ||
+	    (ptn_exists(&q->ptn) && ptn_action(&q->ptn, PTN_EFFECT_DUP, false)))
 		++count;
 
 	/* Drop packet? */
@@ -429,7 +655,7 @@ static int netem_enqueue(struct sk_buff *skb, struct Qdisc *sch)
 	/* If a delay is expected, orphan the skb. (orphaning usually takes
 	 * place at TX completion time, so _before_ the link transit delay)
 	 */
-	if (q->latency || q->jitter)
+	if (q->latency || q->jitter || (ptn_exists(&q->ptn) && (q->ptn.type & (PTN_EFFECT_DELAY | PTN_EFFECT_REORDER))))
 		skb_orphan_partial(skb);
 
 	/*
@@ -440,10 +666,14 @@ static int netem_enqueue(struct sk_buff *skb, struct Qdisc *sch)
 	if (count > 1 && (skb2 = skb_clone(skb, GFP_ATOMIC)) != NULL) {
 		struct Qdisc *rootq = qdisc_root(sch);
 		u32 dupsave = q->duplicate; /* prevent duplicating a dup... */
-		q->duplicate = 0;
+		if (ptn_exists(&q->ptn))
+			q->ptn.ptn_priv.dflt = true;
 
-		qdisc_enqueue_root(skb2, rootq);
+		q->duplicate = 0;
+		rootq->enqueue(skb2, rootq);
 		q->duplicate = dupsave;
+		if (ptn_exists(&q->ptn))
+			q->ptn.ptn_priv.dflt = false;
 	}
 
 	/*
@@ -452,14 +682,25 @@ static int netem_enqueue(struct sk_buff *skb, struct Qdisc *sch)
 	 * If packet is going to be hardware checksummed, then
 	 * do it now in software before we mangle it.
 	 */
-	if (q->corrupt && q->corrupt >= get_crandom(&q->corrupt_cor)) {
+	if ((q->corrupt && q->corrupt >= get_crandom(&q->corrupt_cor)) ||
+	    (ptn_exists(&q->ptn) && (tmp_bits = ptn_value(&q->ptn, PTN_EFFECT_ERROR, 0)) > 0)) {
 		if (!(skb = skb_unshare(skb, GFP_ATOMIC)) ||
 		    (skb->ip_summed == CHECKSUM_PARTIAL &&
 		     skb_checksum_help(skb)))
 			return qdisc_drop(skb, sch);
 
-		skb->data[prandom_u32() % skb_headlen(skb)] ^=
-			1<<(prandom_u32() % 8);
+		if (!tmp_bits) {
+			skb->data[prandom_u32() % skb_headlen(skb)] ^=
+				1<<(prandom_u32() % 8);
+		} else {
+			u16 x = tmp_bits - 1;
+			int tot_bits = (skb_headlen(skb) - skb_network_offset(skb)) * 8;
+
+			if (x < tot_bits) {
+				x += skb_network_offset(skb) * 8;
+				skb->data[x / 8] ^= 1 << x % 8;
+			}
+		}
 	}
 
 	if (unlikely(skb_queue_len(&sch->q) >= sch->limit))
@@ -473,11 +714,20 @@ static int netem_enqueue(struct sk_buff *skb, struct Qdisc *sch)
 	    q->reorder < get_crandom(&q->reorder_cor)) {
 		psched_time_t now;
 		psched_tdiff_t delay;
+		psched_tdiff_t delay_knet = USEC_TO_PTN_TIME(tick2time(q->latency));
 
 		delay = tabledist(q->latency, q->jitter,
 				  &q->delay_cor, q->delay_dist);
 
+		if (ptn_exists(&q->ptn))
+			delay = q->latency = time2tick(PTN_TIME_TO_USEC(ptn_value(&q->ptn, PTN_EFFECT_DELAY, delay_knet)));
+
 		now = psched_get_time();
+
+		if (ptn_exists(&q->ptn)) {
+			q->rate = ptn_value(&q->ptn, PTN_EFFECT_RATE, q->rate << 3);
+			q->rate = q->rate >> 3;
+		}
 
 		if (q->rate) {
 			struct sk_buff *last;
@@ -502,6 +752,44 @@ static int netem_enqueue(struct sk_buff *skb, struct Qdisc *sch)
 
 		cb->time_to_send = now + delay;
 		cb->tstamp_save = skb->tstamp;
+
+		if (ptn_exists(&q->ptn) && (q->ptn.type & PTN_EFFECT_REORDER)) {
+			u64 reo_len = 0;
+			hrtimer_cancel(&q->ptn.reo_timer);
+			if (!skb_queue_empty(&q->ptn.reorder_queue)) {
+				struct sk_buff *skb_r, *next;
+				skb_queue_walk_safe(&q->ptn.reorder_queue,
+						    skb_r, next) {
+					netem_skb_cb(skb_r)->reo_len--;
+
+					if (!netem_skb_cb(skb_r)->reo_len) {
+						skb_unlink(skb_r, &q->ptn.reorder_queue);
+						netem_skb_cb(skb_r)->time_to_send = now;
+						netem_skb_cb(skb_r)->tstamp_save = skb_r->tstamp;
+						__skb_queue_head(&sch->q, skb_r);
+						sch->q.qlen--;
+						sch->qstats.requeues++;
+					}
+				}
+			}
+
+			if ((reo_len = ptn_value(&q->ptn, PTN_EFFECT_REORDER, 0)) > 0) {
+				cb->reo_len = reo_len + 1;
+				skb_queue_tail(&q->ptn.reorder_queue, skb);
+				hrtimer_start(&q->ptn.reo_timer,
+					      ktime_set(PTN_TIMEOUT,0),
+					      HRTIMER_MODE_REL);
+				sch->q.qlen++;
+				return NET_XMIT_SUCCESS;
+			}
+
+			if (!skb_queue_empty(&q->ptn.reorder_queue)) {
+				hrtimer_start(&q->ptn.reo_timer,
+					      ktime_set(PTN_TIMEOUT,0),
+					      HRTIMER_MODE_REL);
+			}
+		}
+
 		++q->counter;
 		tfifo_enqueue(skb, sch);
 	} else {
@@ -515,6 +803,13 @@ static int netem_enqueue(struct sk_buff *skb, struct Qdisc *sch)
 		__skb_queue_head(&sch->q, skb);
 		sch->qstats.requeues++;
 	}
+
+	return NET_XMIT_SUCCESS;
+
+kaunetem_out:
+	cb = netem_skb_cb(skb);
+	cb->time_to_send = psched_get_time();
+	__skb_queue_head(&sch->q, skb);
 
 	return NET_XMIT_SUCCESS;
 }
@@ -642,7 +937,7 @@ static void dist_free(struct disttable *d)
  * Distribution data is a variable size payload containing
  * signed 16 bit values.
  */
-static int get_dist_table(struct Qdisc *sch, const struct nlattr *attr)
+static int get_dist_table(struct Qdisc *sch, const struct nlattr *attr, int type)
 {
 	struct netem_sched_data *q = qdisc_priv(sch);
 	size_t n = nla_len(attr)/sizeof(__s16);
@@ -669,7 +964,10 @@ static int get_dist_table(struct Qdisc *sch, const struct nlattr *attr)
 	root_lock = qdisc_root_sleeping_lock(sch);
 
 	spin_lock_bh(root_lock);
-	swap(q->delay_dist, d);
+	if (type == TCA_NETEM_DELAY_DIST)
+		swap(q->delay_dist, d);
+	else if (TCA_NETEM_PATTERN)
+		swap(q->ptn.ptn_data, d);
 	spin_unlock_bh(root_lock);
 
 	dist_free(d);
@@ -777,6 +1075,7 @@ static const struct nla_policy netem_policy[TCA_NETEM_MAX + 1] = {
 	[TCA_NETEM_LOSS]	= { .type = NLA_NESTED },
 	[TCA_NETEM_ECN]		= { .type = NLA_U32 },
 	[TCA_NETEM_RATE64]	= { .type = NLA_U64 },
+	[TCA_NETEM_PTYPE]	= { .type = NLA_U16 },
 };
 
 static int parse_attr(struct nlattr *tb[], int maxtype, struct nlattr *nla,
@@ -830,7 +1129,8 @@ static int netem_change(struct Qdisc *sch, struct nlattr *opt)
 	}
 
 	if (tb[TCA_NETEM_DELAY_DIST]) {
-		ret = get_dist_table(sch, tb[TCA_NETEM_DELAY_DIST]);
+		ret = get_dist_table(sch, tb[TCA_NETEM_DELAY_DIST],
+				     TCA_NETEM_DELAY_DIST);
 		if (ret) {
 			/* recover clg and loss_model, in case of
 			 * q->clg and q->loss_model were modified
@@ -842,11 +1142,30 @@ static int netem_change(struct Qdisc *sch, struct nlattr *opt)
 		}
 	}
 
+	if (tb[TCA_NETEM_PATTERN]) {
+		ret = get_dist_table(sch, tb[TCA_NETEM_PATTERN],
+				     TCA_NETEM_PATTERN);
+		if (ret) {
+			q->clg = old_clg;
+			q->loss_model = old_loss_model;
+			return ret;
+		}
+		if (tb[TCA_NETEM_PTYPE])
+			q->ptn.type = nla_get_u16(tb[TCA_NETEM_PTYPE]);
+
+		if (q->ptn.type & PTN_EFFECT_LOSS) {
+			q->ptn.ptn_priv.old_lm = old_loss_model;
+			q->loss_model = CLG_PATTERN;
+		}
+		ptn_init(&q->ptn);
+	}
+
 	sch->limit = qopt->limit;
 
 	q->latency = qopt->latency;
 	q->jitter = qopt->jitter;
 	q->limit = qopt->limit;
+	q->fwmark = qopt->fwmark;
 	q->gap = qopt->gap;
 	q->counter = 0;
 	q->loss = qopt->loss;
@@ -880,6 +1199,89 @@ static int netem_change(struct Qdisc *sch, struct nlattr *opt)
 	return ret;
 }
 
+/* ptn_time 	- callback for time-driven patterns. If a pattern should be
+ * 		  invoked the corresponding action will occur upon next enqueue.
+ *
+ * 		  the callback also schedules next event, or terminates the
+ * 		  timer if the pattern has reached its end.
+ */
+static enum hrtimer_restart ptn_time(struct hrtimer *timer)
+{
+	struct kaunet_pattern *p = container_of(timer, struct kaunet_pattern,
+						ptn_timer);
+	u64 dist = 0;
+	u16 tmp;
+
+	switch (p->type & PTN_EFFECT) {
+	case PTN_EFFECT_LOSS:
+	case PTN_EFFECT_DUP:
+		if (!p->dist) { /* TODO: change order of statements? */
+			p->pos++;
+			p->dist = ptn_extract_dist(ptn_get(p));
+		}
+		break;
+	case PTN_EFFECT_DELAY:
+	case PTN_EFFECT_RATE:
+		if (!p->dist) {
+			tmp = ptn_get(p);
+			if (!ptn_is_value(tmp)) {
+				p->dist = tmp - 1;
+				p->pos++;
+			}
+			else
+				p->dist = 1;
+		}
+		break;
+	default:
+		knetdbg("unknown pattern, stopping timer\n");
+		return HRTIMER_NORESTART;
+	}
+
+	if (p->dist > 1) { /* schedule event and prevent pattern invocation */
+		dist = p->dist - 1;
+		p->dist = 1;
+	} else if (p->dist == 1) { /* enable pattern, and check next ms */
+		dist = p->dist = 0;
+	}
+
+	if (!ptn_has_ended(p)) {
+		dist = dist ? PTN_TIME_TO_NSEC(dist) : PTN_TIME_DELTA;
+		hrtimer_forward(timer, hrtimer_cb_get_time(timer), ktime_set(0, dist));
+		return HRTIMER_RESTART;
+	}
+	knetdbg("pattern has reached its end: %d\n", p->pos);
+
+	return HRTIMER_NORESTART;
+}
+
+static enum hrtimer_restart reo_release(struct hrtimer *timer)
+{
+	struct kaunet_pattern *p = container_of(timer, struct kaunet_pattern,
+						reo_timer);
+	struct netem_sched_data *q = container_of(p, struct netem_sched_data,
+						  ptn);
+	struct Qdisc *sch = q->watchdog.qdisc;
+
+	if (!(p->type & PTN_EFFECT_REORDER)) {
+		knetdbg("put assert here\n");
+		return HRTIMER_NORESTART;
+	}
+
+	/* TODO: use the "correct" pointers below... */
+	if (!skb_queue_empty(&q->ptn.reorder_queue)) {
+		struct sk_buff *skb_r;
+		struct sk_buff *next;
+		skb_queue_walk_safe(&q->ptn.reorder_queue, skb_r, next) {
+			skb_unlink(skb_r, &q->ptn.reorder_queue);
+			netem_skb_cb(skb_r)->time_to_send = psched_get_time();
+			netem_skb_cb(skb_r)->tstamp_save = skb_r->tstamp;
+			__skb_queue_head(&sch->q, skb_r);
+			sch->qstats.requeues++;
+		}
+	}
+	return HRTIMER_NORESTART;
+}
+
 static int netem_init(struct Qdisc *sch, struct nlattr *opt)
 {
 	struct netem_sched_data *q = qdisc_priv(sch);
@@ -889,6 +1291,12 @@ static int netem_init(struct Qdisc *sch, struct nlattr *opt)
 		return -EINVAL;
 
 	qdisc_watchdog_init(&q->watchdog, sch);
+	hrtimer_init(&q->ptn.ptn_timer, CLOCK_MONOTONIC, HRTIMER_MODE_REL);
+	q->ptn.ptn_timer.function = ptn_time;
+
+	skb_queue_head_init(&q->ptn.reorder_queue);
+	hrtimer_init(&q->ptn.reo_timer, CLOCK_MONOTONIC, HRTIMER_MODE_REL);
+	q->ptn.reo_timer.function = reo_release;
 
 	q->loss_model = CLG_RANDOM;
 	ret = netem_change(sch, opt);
@@ -902,9 +1310,14 @@ static void netem_destroy(struct Qdisc *sch)
 	struct netem_sched_data *q = qdisc_priv(sch);
 
 	qdisc_watchdog_cancel(&q->watchdog);
+	hrtimer_cancel(&q->ptn.ptn_timer);
+	hrtimer_cancel(&q->ptn.reo_timer);
+
 	if (q->qdisc)
 		qdisc_destroy(q->qdisc);
 	dist_free(q->delay_dist);
+	dist_free(q->ptn.ptn_data);
+	skb_queue_purge(&q->ptn.reorder_queue);
 }
 
 static int dump_loss_model(const struct netem_sched_data *q,
@@ -947,6 +1360,9 @@ static int dump_loss_model(const struct netem_sched_data *q,
 			goto nla_put_failure;
 		break;
 	}
+	case CLG_PATTERN:
+		nla_nest_cancel(skb, nest);
+		return 0;
 	}
 
 	nla_nest_end(skb, nest);

@@ -1596,6 +1596,8 @@ void mptcp_sub_send_loss_probe(struct sock *sk)
         struct tcp_sock *tp = tcp_sk(sk);
         struct sk_buff *skb_it, *tmp;
 
+	if (!sysctl_mptcp_loss_probe)
+	    goto no_mptlp;
         printk("Enter MPTCP Send_loss_probe");
         /* START OF NEW TLP */
         if (tcp_send_head(sk)) {
@@ -1646,8 +1648,11 @@ void mptcp_sub_send_loss_probe(struct sock *sk)
 	/* Avoid using the same flow by treating as potential path failure for that flow */
 	tp->pf = 1;
         mptcp_push_pending_frames(meta_sk);
-	tp->pf = 0;
+		/*	tp->pf = 0;*/
         /* END OF NEW TLP */
+        return;
+no_mptlp:
+	        tcp_send_loss_probe(sk);
 
 
 }
