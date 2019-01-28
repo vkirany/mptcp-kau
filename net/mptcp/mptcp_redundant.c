@@ -114,6 +114,10 @@ static struct sock *redundant_get_subflow(struct sock *meta_sk,
 		first_tp = mpcb->connection_list;
 	tp = first_tp;
 
+	/* still NULL (no subflow in connection_list?) */
+	if (!first_tp)
+		return NULL;
+
 	/* Search for any subflow to send it */
 	do {
 		if (mptcp_is_available((struct sock *)tp, skb,
@@ -143,7 +147,8 @@ static void redsched_correct_skb_pointers(struct sock *meta_sk,
 
 /* Returns the next skb from the queue */
 static struct sk_buff *redundant_next_skb_from_queue(struct sk_buff_head *queue,
-						     struct sk_buff *previous)
+						     struct sk_buff *previous,
+						     struct sock *meta_sk)
 {
 	if (skb_queue_empty(queue))
 		return NULL;
@@ -153,6 +158,26 @@ static struct sk_buff *redundant_next_skb_from_queue(struct sk_buff_head *queue,
 
 	if (skb_queue_is_last(queue, previous))
 		return NULL;
+
+	/* sk_data->skb stores the last scheduled packet for this subflow.
+	 * If sk_data->skb was scheduled but not sent (e.g., due to nagle),
+	 * we have to schedule it again.
+	 *
+	 * For the redundant scheduler, there are two cases:
+	 * 1. sk_data->skb was not sent on another subflow:
+	 *    we have to schedule it again to ensure that we do not
+	 *    skip this packet.
+	 * 2. sk_data->skb was already sent on another subflow:
+	 *    with regard to the redundant semantic, we have to
+	 *    schedule it again. However, we keep it simple and ignore it,
+	 *    as it was already sent by another subflow.
+	 *    This might be changed in the future.
+	 *
+	 * For case 1, send_head is equal previous, as only a single
+	 * packet can be skipped.
+	 */
+	if (tcp_send_head(meta_sk) == previous)
+		return tcp_send_head(meta_sk);
 
 	return skb_queue_next(queue, previous);
 }
@@ -169,6 +194,9 @@ static struct sk_buff *redundant_next_segment(struct sock *meta_sk,
 	struct tcp_sock *tp;
 	struct sk_buff *skb;
 	int active_valid_sks = -1;
+
+	/* As we set it, we have to reset it as well. */
+	*limit = 0;
 
 	if (skb_queue_empty(&mpcb->reinject_queue) &&
 	    skb_queue_empty(&meta_sk->sk_write_queue))
@@ -189,6 +217,11 @@ static struct sk_buff *redundant_next_segment(struct sock *meta_sk,
 
 	if (!first_tp)
 		first_tp = mpcb->connection_list;
+
+	/* still NULL (no subflow in connection_list?) */
+	if (!first_tp)
+		return NULL;
+
 	tp = first_tp;
 
 	*reinject = 0;
@@ -201,7 +234,7 @@ static struct sk_buff *redundant_next_segment(struct sock *meta_sk,
 		redsched_correct_skb_pointers(meta_sk, sk_data);
 
 		skb = redundant_next_skb_from_queue(&meta_sk->sk_write_queue,
-						    sk_data->skb);
+						    sk_data->skb, meta_sk);
 		if (skb && redsched_use_subflow(meta_sk, active_valid_sks, tp,
 						skb)) {
 			sk_data->skb = skb;
@@ -235,7 +268,7 @@ static void redundant_release(struct sock *sk)
 		cb_data->next_subflow = tp->mptcp->next;
 }
 
-struct mptcp_sched_ops mptcp_sched_redundant = {
+static struct mptcp_sched_ops mptcp_sched_redundant = {
 	.get_subflow = redundant_get_subflow,
 	.next_segment = redundant_next_segment,
 	.release = redundant_release,

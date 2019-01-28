@@ -240,6 +240,9 @@ static void __mptcp_reinject_data(struct sk_buff *orig_skb, struct sock *meta_sk
 		if (!after(end_seq, TCP_SKB_CB(skb1)->seq))
 			break;
 
+		if (before(end_seq, TCP_SKB_CB(skb1)->end_seq))
+			break;
+
 		__skb_unlink(skb1, &mpcb->reinject_queue);
 		__kfree_skb(skb1);
 	}
@@ -449,8 +452,14 @@ static bool mptcp_skb_entail(struct sock *sk, struct sk_buff *skb, int reinject)
 
 	TCP_SKB_CB(skb)->path_mask |= mptcp_pi_to_flag(tp->mptcp->path_index);
 
-	if (!(sk->sk_route_caps & NETIF_F_ALL_CSUM) &&
-	    skb->ip_summed == CHECKSUM_PARTIAL) {
+	/* Compute checksum, if:
+	 * 1. The current route does not support csum offloading but it was
+	 *    assumed that it does (ip_summed is CHECKSUM_PARTIAL)
+	 * 2. We need the DSS-checksum but ended up not pre-computing it
+	 *    (e.g., in the case of TFO retransmissions).
+	 */
+	if (skb->ip_summed == CHECKSUM_PARTIAL &&
+	    (!(sk->sk_route_caps & NETIF_F_ALL_CSUM) || tp->mpcb->dss_csum)) {
 		subskb->csum = skb->csum = skb_checksum(skb, 0, skb->len, 0);
 		subskb->ip_summed = skb->ip_summed = CHECKSUM_NONE;
 	}
@@ -623,6 +632,7 @@ int mptcp_write_wakeup(struct sock *meta_sk)
 		tcp_event_new_data_sent(meta_sk, skb);
 
 		__tcp_push_pending_frames(subsk, mss, TCP_NAGLE_PUSH);
+		meta_tp->lsndtime = tcp_time_stamp;
 
 		return 0;
 	} else {
@@ -743,6 +753,8 @@ bool mptcp_write_xmit(struct sock *meta_sk, unsigned int mss_now, int nonagle,
 		 * always push on the subflow
 		 */
 		__tcp_push_pending_frames(subsk, mss_now, TCP_NAGLE_PUSH);
+		meta_tp->lsndtime = tcp_time_stamp;
+
 		path_mask |= mptcp_pi_to_flag(subtp->mptcp->path_index);
 		skb_mstamp_get(&skb->skb_mstamp);
 
@@ -927,15 +939,6 @@ void mptcp_established_options(struct sock *sk, struct sk_buff *skb,
 	if (!skb && is_meta_sk(sk))
 		return;
 
-	/* In fallback mp_fail-mode, we have to repeat it until the fallback
-	 * has been done by the sender
-	 */
-	if (unlikely(tp->mptcp->send_mp_fail)) {
-		opts->options |= OPTION_MPTCP;
-		opts->mptcp_options |= OPTION_MP_FAIL;
-		*size += MPTCP_SUB_LEN_FAIL;
-	}
-
 	if (unlikely(tp->send_mp_fclose)) {
 		opts->options |= OPTION_MPTCP;
 		opts->mptcp_options |= OPTION_MP_FCLOSE;
@@ -982,7 +985,8 @@ void mptcp_established_options(struct sock *sk, struct sk_buff *skb,
 		if (skb)
 			tp->mptcp->include_mpc = 0;
 	}
-	if (unlikely(tp->mptcp->pre_established)) {
+	if (unlikely(tp->mptcp->pre_established) &&
+	    (!skb || !(tcb->tcp_flags & (TCPHDR_FIN | TCPHDR_RST)))) {
 		opts->options |= OPTION_MPTCP;
 		opts->mptcp_options |= OPTION_MP_JOIN | OPTION_TYPE_ACK;
 		*size += MPTCP_SUB_LEN_JOIN_ACK_ALIGN;
@@ -1014,6 +1018,16 @@ void mptcp_established_options(struct sock *sk, struct sk_buff *skb,
 		}
 
 		*size += MPTCP_SUB_LEN_DSS_ALIGN;
+	}
+
+	/* In fallback mp_fail-mode, we have to repeat it until the fallback
+	 * has been done by the sender
+	 */
+	if (unlikely(tp->mptcp->send_mp_fail) && skb &&
+	    MAX_TCP_OPTION_SPACE - *size >= MPTCP_SUB_LEN_FAIL) {
+		opts->options |= OPTION_MPTCP;
+		opts->mptcp_options |= OPTION_MP_FAIL;
+		*size += MPTCP_SUB_LEN_FAIL;
 	}
 
 	if (unlikely(mpcb->addr_signal) && mpcb->pm_ops->addr_signal &&
@@ -1294,13 +1308,20 @@ void mptcp_send_active_reset(struct sock *meta_sk, gfp_t priority)
 
 	mptcp_sub_force_close_all(mpcb, sk);
 
+	tcp_set_state(sk, TCP_RST_WAIT);
+
 	if (!in_serving_softirq())
 		local_bh_enable();
 
 	tcp_send_ack(sk);
+	tcp_clear_xmit_timers(sk);
 	inet_csk_reset_keepalive_timer(sk, inet_csk(sk)->icsk_rto);
 
 	meta_tp->send_mp_fclose = 1;
+	inet_csk(sk)->icsk_retransmits = 0;
+
+	/* Prevent exp backoff reverting on ICMP dest unreachable */
+	inet_csk(sk)->icsk_backoff = 0;
 
 	MPTCP_INC_STATS(sock_net(meta_sk), MPTCP_MIB_FASTCLOSETX);
 }
@@ -1464,6 +1485,7 @@ int mptcp_retransmit_skb(struct sock *meta_sk, struct sk_buff *skb)
 		meta_tp->retrans_stamp = tcp_skb_timestamp(skb);
 
 	__tcp_push_pending_frames(subsk, mss_now, TCP_NAGLE_PUSH);
+	meta_tp->lsndtime = tcp_time_stamp;
 
 	return 0;
 

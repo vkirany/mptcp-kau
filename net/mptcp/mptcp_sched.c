@@ -65,12 +65,6 @@ static bool mptcp_is_temp_unavailable(struct sock *sk,
 			return true;
 	}
 
-	/* If TSQ is already throttling us, do not send on this subflow. When
-	 * TSQ gets cleared the subflow becomes eligible again.
-	 */
-	if (test_bit(TSQ_THROTTLED, &tp->tsq_flags))
-		return true;
-
 	in_flight = tcp_packets_in_flight(tp);
 	/* Not even a single spot in the cwnd */
 	if (in_flight >= tp->snd_cwnd)
@@ -223,7 +217,7 @@ struct sock *get_available_subflow(struct sock *meta_sk, struct sk_buff *skb,
 {
 	struct mptcp_cb *mpcb = tcp_sk(meta_sk)->mpcb;
 	struct sock *sk;
-	bool force;
+	bool looping = false, force;
 
 	/* if there is only one subflow, bypass the scheduling function */
 	if (mpcb->cnt_subflows == 1) {
@@ -244,6 +238,7 @@ struct sock *get_available_subflow(struct sock *meta_sk, struct sk_buff *skb,
 	}
 
 	/* Find the best subflow */
+restart:
 	sk = get_subflow_from_selectors(mpcb, skb, &subflow_is_active,
 					zero_wnd_test, &force);
 	if (force)
@@ -254,7 +249,7 @@ struct sock *get_available_subflow(struct sock *meta_sk, struct sk_buff *skb,
 
 	sk = get_subflow_from_selectors(mpcb, skb, &subflow_is_backup,
 					zero_wnd_test, &force);
-	if (!force && skb)
+	if (!force && skb) {
 		/* one used backup sk or one NULL sk where there is no one
 		 * temporally unavailable unused backup sk
 		 *
@@ -262,6 +257,12 @@ struct sock *get_available_subflow(struct sock *meta_sk, struct sk_buff *skb,
 		 * sks, so clean the path mask
 		 */
 		TCP_SKB_CB(skb)->path_mask = 0;
+
+		if (!looping) {
+			looping = true;
+			goto restart;
+		}
+	}
 	return sk;
 }
 EXPORT_SYMBOL_GPL(get_available_subflow);
@@ -531,6 +532,15 @@ void mptcp_unregister_scheduler(struct mptcp_sched_ops *sched)
 	spin_lock(&mptcp_sched_list_lock);
 	list_del_rcu(&sched->list);
 	spin_unlock(&mptcp_sched_list_lock);
+
+	/* Wait for outstanding readers to complete before the
+	 * module gets removed entirely.
+	 *
+	 * A try_module_get() should fail by now as our module is
+	 * in "going" state since no refs are held anymore and
+	 * module_exit() handler being called.
+	 */
+	synchronize_rcu();
 }
 EXPORT_SYMBOL_GPL(mptcp_unregister_scheduler);
 

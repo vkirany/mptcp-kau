@@ -430,6 +430,9 @@ struct mptcp_cb {
 
 #define OPTION_MPTCP		(1 << 5)
 
+/* Max number of fastclose retransmissions */
+#define MPTCP_FASTCLOSE_RETRIES 3
+
 #ifdef CONFIG_MPTCP
 
 /* Used for checking if the mptcp initialization has been successful */
@@ -749,7 +752,10 @@ struct mptcp_mib {
 };
 
 extern struct lock_class_key meta_key;
+extern char *meta_key_name;
 extern struct lock_class_key meta_slock_key;
+extern char *meta_slock_key_name;
+
 extern u32 mptcp_secret[MD5_MESSAGE_BYTES / 4];
 
 /* This is needed to ensure that two subsequent key/nonce-generation result in
@@ -793,7 +799,7 @@ void mptcp_cleanup_rbuf(struct sock *meta_sk, int copied);
 int mptcp_add_sock(struct sock *meta_sk, struct sock *sk, u8 loc_id, u8 rem_id,
 		   gfp_t flags);
 void mptcp_del_sock(struct sock *sk);
-void mptcp_update_metasocket(struct sock *sock, const struct sock *meta_sk);
+void mptcp_update_metasocket(const struct sock *meta_sk);
 void mptcp_reinject_data(struct sock *orig_sk, int clone_it);
 void mptcp_update_sndbuf(const struct tcp_sock *tp);
 void mptcp_send_fin(struct sock *meta_sk);
@@ -844,12 +850,13 @@ void mptcp_sub_close_wq(struct work_struct *work);
 void mptcp_sub_close(struct sock *sk, unsigned long delay);
 struct sock *mptcp_select_ack_sock(const struct sock *meta_sk);
 void mptcp_fallback_meta_sk(struct sock *meta_sk);
+void mptcp_prepare_for_backlog(struct sock *sk, struct sk_buff *skb);
 int mptcp_backlog_rcv(struct sock *meta_sk, struct sk_buff *skb);
 void mptcp_ack_handler(unsigned long);
-int mptcp_check_rtt(const struct tcp_sock *tp, int time);
+bool mptcp_check_rtt(const struct tcp_sock *tp, int time);
 int mptcp_check_snd_buf(const struct tcp_sock *tp);
-int mptcp_handle_options(struct sock *sk, const struct tcphdr *th,
-			 const struct sk_buff *skb);
+bool mptcp_handle_options(struct sock *sk, const struct tcphdr *th,
+			  const struct sk_buff *skb);
 void __init mptcp_init(void);
 void mptcp_destroy_sock(struct sock *sk);
 int mptcp_rcv_synsent_state_process(struct sock *sk, struct sock **skptr,
@@ -888,7 +895,6 @@ void mptcp_reqsk_init(struct request_sock *req, struct sock *sk,
 int mptcp_conn_request(struct sock *sk, struct sk_buff *skb);
 void mptcp_enable_sock(struct sock *sk);
 void mptcp_disable_sock(struct sock *sk);
-void mptcp_enable_static_key(void);
 void mptcp_disable_static_key(void);
 void mptcp_cookies_reqsk_init(struct request_sock *req,
 			      struct mptcp_options_received *mopt,
@@ -1391,7 +1397,7 @@ static inline int is_master_tp(const struct tcp_sock *tp)
 }
 static inline void mptcp_purge_ofo_queue(struct tcp_sock *meta_tp) {}
 static inline void mptcp_del_sock(const struct sock *sk) {}
-static inline void mptcp_update_metasocket(struct sock *sock, const struct sock *meta_sk) {}
+static inline void mptcp_update_metasocket(const struct sock *meta_sk) {}
 static inline void mptcp_reinject_data(struct sock *orig_sk, int clone_it) {}
 static inline void mptcp_update_sndbuf(const struct tcp_sock *tp) {}
 static inline void mptcp_clean_rtx_infinite(const struct sk_buff *skb,
@@ -1451,20 +1457,21 @@ static inline bool mptcp_fallback_infinite(const struct sock *sk, int flag)
 	return false;
 }
 static inline void mptcp_init_mp_opt(const struct mptcp_options_received *mopt) {}
-static inline int mptcp_check_rtt(const struct tcp_sock *tp, int time)
+static inline void mptcp_prepare_for_backlog(struct sock *sk, struct sk_buff *skb) {}
+static inline bool mptcp_check_rtt(const struct tcp_sock *tp, int time)
 {
-	return 0;
+	return false;
 }
 static inline int mptcp_check_snd_buf(const struct tcp_sock *tp)
 {
 	return 0;
 }
 static inline void mptcp_send_reset(const struct sock *sk) {}
-static inline int mptcp_handle_options(struct sock *sk,
-				       const struct tcphdr *th,
-				       struct sk_buff *skb)
+static inline bool mptcp_handle_options(struct sock *sk,
+					const struct tcphdr *th,
+					struct sk_buff *skb)
 {
-	return 0;
+	return false;
 }
 static inline void mptcp_reset_mopt(struct tcp_sock *tp) {}
 static inline void  __init mptcp_init(void) {}

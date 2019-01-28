@@ -946,7 +946,7 @@ static void tcp_v6_timewait_ack(struct sock *sk, struct sk_buff *skb)
 	u32 data_ack = 0;
 	int mptcp = 0;
 
-	if (tcptw->mptcp_tw && tcptw->mptcp_tw->meta_tw) {
+	if (tcptw->mptcp_tw) {
 		data_ack = (u32)tcptw->mptcp_tw->rcv_nxt;
 		mptcp = 1;
 	}
@@ -1510,7 +1510,7 @@ process:
 
 		bh_lock_sock_nested(meta_sk);
 		if (sock_owned_by_user(meta_sk))
-			skb->sk = sk;
+			mptcp_prepare_for_backlog(sk, skb);
 	} else {
 		meta_sk = sk;
 		bh_lock_sock_nested(sk);
@@ -1951,9 +1951,8 @@ static void tcp_v6_clear_sk(struct sock *sk, int size)
 	struct inet_sock *inet = inet_sk(sk);
 #ifdef CONFIG_MPTCP
 	struct tcp_sock *tp = tcp_sk(sk);
-	/* size_tk_table goes from the end of tk_table to the end of sk */
-	int size_tk_table = size - offsetof(struct tcp_sock, tk_table) -
-			    sizeof(tp->tk_table);
+	/* size_tk_table goes from tk_table.pprev to the end of sk */
+	int size_tk_table = size - offsetof(struct tcp_sock, tk_table.pprev);
 #endif
 
 	/* we do not want to clear pinet6 field, because of RCU lookups */
@@ -1963,12 +1962,12 @@ static void tcp_v6_clear_sk(struct sock *sk, int size)
 
 #ifdef CONFIG_MPTCP
 	/* We zero out only from pinet6 to tk_table */
-	size -= size_tk_table + sizeof(tp->tk_table);
+	size -= (size_tk_table + sizeof(tp->tk_table.next));
 #endif
 	memset(&inet->pinet6 + 1, 0, size);
 
 #ifdef CONFIG_MPTCP
-	memset((char *)&tp->tk_table + sizeof(tp->tk_table), 0, size_tk_table);
+	memset(&tp->tk_table.pprev, 0, size_tk_table);
 #endif
 
 }
@@ -2018,6 +2017,9 @@ struct proto tcpv6_prot = {
 	.proto_cgroup		= tcp_proto_cgroup,
 #endif
 	.clear_sk		= tcp_v6_clear_sk,
+#ifdef CONFIG_MPTCP
+	.copy_sk		= tcp_copy_sk,
+#endif
 };
 
 static const struct inet6_protocol tcpv6_protocol = {
