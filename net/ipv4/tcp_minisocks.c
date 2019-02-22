@@ -455,6 +455,7 @@ void tcp_ca_openreq_child(struct sock *sk, const struct dst_entry *dst)
 		tcp_assign_congestion_control(sk);
 
 	tcp_set_ca_state(sk, TCP_CA_Open);
+	mptcp_set_ca_state(sk, TCP_CA_Open);
 }
 EXPORT_SYMBOL_GPL(tcp_ca_openreq_child);
 

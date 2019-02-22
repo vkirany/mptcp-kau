@@ -2019,6 +2019,7 @@ void tcp_enter_loss(struct sock *sk)
 		tp->reordering = min_t(unsigned int, tp->reordering,
 				       net->ipv4.sysctl_tcp_reordering);
 	tcp_set_ca_state(sk, TCP_CA_Loss);
+	mptcp_set_ca_state(sk,TCP_CA_Loss);
 	tp->high_seq = tp->snd_nxt;
 	tcp_ecn_queue_cwr(tp);
 
@@ -2439,6 +2440,7 @@ static bool tcp_try_undo_recovery(struct sock *sk)
 		return true;
 	}
 	tcp_set_ca_state(sk, TCP_CA_Open);
+	mptcp_set_ca_state(sk,TCP_CA_Open);
 	tp->is_sack_reneg = 0;
 	return false;
 }
@@ -2473,6 +2475,7 @@ static bool tcp_try_undo_loss(struct sock *sk, bool frto_undo)
 		inet_csk(sk)->icsk_retransmits = 0;
 		if (frto_undo || tcp_is_sack(tp)) {
 			tcp_set_ca_state(sk, TCP_CA_Open);
+			mptcp_set_ca_state(sk, TCP_CA_Open);
 			tp->is_sack_reneg = 0;
 		}
 		return true;
@@ -2556,6 +2559,7 @@ void tcp_enter_cwr(struct sock *sk)
 		tp->undo_marker = 0;
 		tcp_init_cwnd_reduction(sk);
 		tcp_set_ca_state(sk, TCP_CA_CWR);
+		mptcp_set_ca_state(sk, TCP_CA_CWR);
 	}
 }
 EXPORT_SYMBOL(tcp_enter_cwr);
@@ -2570,6 +2574,7 @@ static void tcp_try_keep_open(struct sock *sk)
 
 	if (inet_csk(sk)->icsk_ca_state != state) {
 		tcp_set_ca_state(sk, state);
+		mptcp_set_ca_state(sk, state);
 		tp->high_seq = tp->snd_nxt;
 	}
 }
@@ -2665,6 +2670,7 @@ void tcp_simple_retransmit(struct sock *sk)
 		tp->prior_ssthresh = 0;
 		tp->undo_marker = 0;
 		tcp_set_ca_state(sk, TCP_CA_Loss);
+		mptcp_set_ca_state(sk, TCP_CA_Loss);
 	}
 	tcp_xmit_retransmit_queue(sk);
 }
@@ -2691,6 +2697,7 @@ void tcp_enter_recovery(struct sock *sk, bool ece_ack)
 		tcp_init_cwnd_reduction(sk);
 	}
 	tcp_set_ca_state(sk, TCP_CA_Recovery);
+	mptcp_set_ca_state(sk, TCP_CA_Recovery);
 }
 
 /* Process an ACK in CA_Loss state. Move to CA_Open if lost data are
@@ -2845,6 +2852,7 @@ static void tcp_fastretrans_alert(struct sock *sk, const int acked,
 			if (tp->snd_una != tp->high_seq) {
 				tcp_end_cwnd_reduction(sk);
 				tcp_set_ca_state(sk, TCP_CA_Open);
+				mptcp_set_ca_state(sk, TCP_CA_Open);
 			}
 			break;
 
@@ -3523,6 +3531,7 @@ static void tcp_process_tlp_ack(struct sock *sk, u32 ack, int flag)
 		 */
 		tcp_init_cwnd_reduction(sk);
 		tcp_set_ca_state(sk, TCP_CA_CWR);
+		mptcp_set_ca_state(sk, TCP_CA_CWR);
 		tcp_end_cwnd_reduction(sk);
 		tcp_try_keep_open(sk);
 		NET_INC_STATS(sock_net(sk),

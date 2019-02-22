@@ -187,7 +187,7 @@ struct mptcp_tcp_sock {
 	u8	loc_id;
 	u8	rem_id;
 
-#define MPTCP_SCHED_SIZE 16
+#define MPTCP_SCHED_SIZE 64
 	u8	mptcp_sched[MPTCP_SCHED_SIZE] __aligned(8);
 
 	int	init_rcv_wnd;
@@ -250,7 +250,12 @@ struct mptcp_sched_ops {
 						struct sock **subsk,
 						unsigned int *limit);
 	void			(*init)(struct sock *sk);
-	void			(*release)(struct sock *sk);
+        void                    (*release)(struct sock *sk);
+        int                     (*advance_window)(struct sock *meta_sk,
+                                                struct sock *subsk,
+                                                struct sk_buff *skb);
+        /* call before changing ca_state (optional) */
+        void (*set_state)(struct sock *sk, u8 new_state);
 
 	char			name[MPTCP_SCHED_NAME_MAX];
 	struct module		*owner;
@@ -906,6 +911,9 @@ void mptcp_get_default_scheduler(char *name);
 int mptcp_set_default_scheduler(const char *name);
 bool mptcp_is_available(struct sock *sk, const struct sk_buff *skb,
 			bool zero_wnd_test);
+
+int mptcp_dont_reinject_skb(const struct tcp_sock *tp, const struct sk_buff *skb);
+bool mptcp_is_temp_unavailable(struct sock *sk, const struct sk_buff *skb, bool zero_wnd_test);
 bool mptcp_is_def_unavailable(struct sock *sk);
 bool subflow_is_active(const struct tcp_sock *tp);
 bool subflow_is_backup(const struct tcp_sock *tp);
@@ -1311,6 +1319,28 @@ static inline bool mptcp_v6_is_v4_mapped(const struct sock *sk)
 {
 	return sk->sk_family == AF_INET6 &&
 	       ipv6_addr_type(&inet6_sk(sk)->saddr) == IPV6_ADDR_MAPPED;
+}
+
+static inline void mptcp_set_ca_state(struct sock *sk, const u8 ca_state)
+{
+	/* lamp */
+	if (mptcp(tcp_sk(sk))) {
+		if (tcp_sk(sk)->mpcb->sched_ops->set_state)
+			tcp_sk(sk)->mpcb->sched_ops->set_state(sk, ca_state);
+	}
+}
+
+static inline int mptcp_advance_window(struct sock *meta_sk, struct sock *subsk, struct sk_buff *skb)
+{
+	/* lamp */
+	if (mptcp(tcp_sk(meta_sk))) {
+		if (tcp_sk(meta_sk)->mpcb->sched_ops->advance_window)
+			return tcp_sk(meta_sk)->mpcb->sched_ops->advance_window(meta_sk, subsk, skb);
+		else
+			return 1;
+	}
+
+	return 1;
 }
 
 static inline bool mptcp_can_new_subflow(const struct sock *meta_sk)
