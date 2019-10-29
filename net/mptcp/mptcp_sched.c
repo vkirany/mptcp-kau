@@ -16,7 +16,7 @@ static struct defsched_priv *defsched_get_priv(const struct tcp_sock *tp)
 	return (struct defsched_priv *)&tp->mptcp->mptcp_sched[0];
 }
 
-static bool mptcp_is_def_unavailable(struct sock *sk)
+bool mptcp_is_def_unavailable(struct sock *sk)
 {
 	const struct tcp_sock *tp = tcp_sk(sk);
 
@@ -217,7 +217,7 @@ static struct sock
  *
  * Additionally, this function is aware of the backup-subflows.
  */
-static struct sock *get_available_subflow(struct sock *meta_sk,
+struct sock *get_available_subflow(struct sock *meta_sk,
 					  struct sk_buff *skb,
 					  bool zero_wnd_test)
 {
