@@ -108,7 +108,11 @@ config MPTCP_REDUNDANT
 	---help---
 	  This scheduler sends all packets redundantly over all subflows to decreases
 	  latency and jitter on the cost of lower throughput.
-
+config MPTCP_LAMP
+       tristate "MPTCP Lamp"
+       depends on (MPTCP=y)
+       ---help---
+ 	 This scheduler uses a loss based state to make scheduling decisions.        
 choice
 	prompt "Default MPTCP Scheduler"
 	default DEFAULT
@@ -125,13 +129,18 @@ choice
 		bool "Round-Robin" if MPTCP_ROUNDROBIN=y
 		---help---
 		  This is the round-rob scheduler, sending in a round-robin
-		  fashion..
-
+		  fashion.
+	
 	config DEFAULT_REDUNDANT
 		bool "Redundant" if MPTCP_REDUNDANT=y
 		---help---
 		  This is the redundant scheduler, sending packets redundantly over
 		  all the subflows.
+       
+	config DEFAULT_LAMP
+               bool "Lamp" if MPTCP_LAMP=y
+               ---help---
+
 
 endchoice
 endif
@@ -142,5 +151,6 @@ config DEFAULT_MPTCP_SCHED
 	default "default" if DEFAULT_SCHEDULER
 	default "roundrobin" if DEFAULT_ROUNDROBIN
 	default "redundant" if DEFAULT_REDUNDANT
+	default "lamp" if DEFAULT_LAMP
 	default "default"
 

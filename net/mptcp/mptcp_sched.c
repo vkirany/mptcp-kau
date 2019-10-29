@@ -16,7 +16,7 @@ static struct defsched_priv *defsched_get_priv(const struct tcp_sock *tp)
 	return (struct defsched_priv *)&tp->mptcp->mptcp_sched[0];
 }
 
-bool mptcp_is_def_unavailable(struct sock *sk)
+static bool mptcp_is_def_unavailable(struct sock *sk)
 {
 	const struct tcp_sock *tp = tcp_sk(sk);
 
@@ -100,8 +100,11 @@ static bool mptcp_is_temp_unavailable(struct sock *sk,
 bool mptcp_is_available(struct sock *sk, const struct sk_buff *skb,
 			bool zero_wnd_test)
 {
-	return !mptcp_is_def_unavailable(sk) &&
-	       !mptcp_is_temp_unavailable(sk, skb, zero_wnd_test);
+	if (sk)
+		return !mptcp_is_def_unavailable(sk) &&
+	       	!mptcp_is_temp_unavailable(sk, skb, zero_wnd_test);
+	else
+		return false;
 }
 EXPORT_SYMBOL_GPL(mptcp_is_available);
 
@@ -214,8 +217,9 @@ static struct sock
  *
  * Additionally, this function is aware of the backup-subflows.
  */
-struct sock *get_available_subflow(struct sock *meta_sk, struct sk_buff *skb,
-				   bool zero_wnd_test)
+static struct sock *get_available_subflow(struct sock *meta_sk,
+					  struct sk_buff *skb,
+					  bool zero_wnd_test)
 {
 	struct mptcp_cb *mpcb = tcp_sk(meta_sk)->mpcb;
 	struct sock *sk;

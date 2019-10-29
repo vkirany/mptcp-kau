@@ -1141,6 +1141,7 @@ static const struct tcp_sock_ops mptcp_sub_specific = {
 	.send_active_reset		= tcp_send_active_reset,
 	.write_wakeup			= tcp_write_wakeup,
 	.retransmit_timer		= mptcp_sub_retransmit_timer,
+	.send_loss_probe                = mptcp_sub_send_loss_probe,
 	.time_wait			= tcp_time_wait,
 	.cleanup_rbuf			= tcp_cleanup_rbuf,
 };

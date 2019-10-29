@@ -1081,6 +1081,7 @@ static inline bool tcp_skb_can_collapse_to(const struct sk_buff *skb)
 	return likely(!TCP_SKB_CB(skb)->eor);
 }
 
+
 /* Events passed to congestion control interface */
 enum tcp_ca_event {
 	CA_EVENT_TX_START,	/* first transmit when no packets in flight */
@@ -2054,6 +2055,7 @@ struct tcp_sock_ops {
 	void (*send_active_reset)(struct sock *sk, gfp_t priority);
 	int (*write_wakeup)(struct sock *sk, int mib);
 	void (*retransmit_timer)(struct sock *sk);
+	void (*send_loss_probe)(struct sock *sk);   /* MPTLP */
 	void (*time_wait)(struct sock *sk, int state, int timeo);
 	void (*cleanup_rbuf)(struct sock *sk, int copied);
 	void (*cwnd_validate)(struct sock *sk, bool is_cwnd_limited);

@@ -253,6 +253,11 @@ struct mptcp_sched_ops {
 						unsigned int *limit);
 	void			(*init)(struct sock *sk);
 	void			(*release)(struct sock *sk);
+	int                             (*advance_window)(struct sock *meta_sk,
+                                               struct sock *subsk,
+                                               struct sk_buff *skb);
+       /* call before changing ca_state (optional) */
+        void (*set_state)(struct sock *sk, u8 new_state);
 
 	char			name[MPTCP_SCHED_NAME_MAX];
 	struct module		*owner;
@@ -822,6 +827,7 @@ void mptcp_clean_rtx_infinite(const struct sk_buff *skb, struct sock *sk);
 void mptcp_fin(struct sock *meta_sk);
 void mptcp_meta_retransmit_timer(struct sock *meta_sk);
 void mptcp_sub_retransmit_timer(struct sock *sk);
+void mptcp_sub_send_loss_probe(struct sock *sk);    /**  MPTLP */
 int mptcp_write_wakeup(struct sock *meta_sk, int mib);
 void mptcp_sub_close_wq(struct work_struct *work);
 void mptcp_sub_close(struct sock *sk, unsigned long delay);
@@ -897,6 +903,8 @@ void mptcp_get_default_scheduler(char *name);
 int mptcp_set_default_scheduler(const char *name);
 bool mptcp_is_available(struct sock *sk, const struct sk_buff *skb,
 			bool zero_wnd_test);
+int mptcp_dont_reinject_skb(const struct tcp_sock *tp, const struct sk_buff *skb);
+bool mptcp_is_temp_unavailable(struct sock *sk, const struct sk_buff *skb, bool zero_wnd_test);
 bool mptcp_is_def_unavailable(struct sock *sk);
 bool subflow_is_active(const struct tcp_sock *tp);
 bool subflow_is_backup(const struct tcp_sock *tp);
@@ -1276,6 +1284,28 @@ static inline bool mptcp_v6_is_v4_mapped(const struct sock *sk)
 	       ipv6_addr_type(&inet6_sk(sk)->saddr) == IPV6_ADDR_MAPPED;
 }
 
+static inline void mptcp_set_ca_state(struct sock *sk, const u8 ca_state)
+{
+       /* lamp */
+       if (mptcp(tcp_sk(sk))) {
+               if (tcp_sk(sk)->mpcb->sched_ops->set_state)
+                       tcp_sk(sk)->mpcb->sched_ops->set_state(sk, ca_state);
+       }
+}
+
+static inline int mptcp_advance_window(struct sock *meta_sk, struct sock *subsk, struct sk_buff *skb)
+{
+       /* lamp */
+       if (mptcp(tcp_sk(meta_sk))) {
+               if (tcp_sk(meta_sk)->mpcb->sched_ops->advance_window)
+                       return tcp_sk(meta_sk)->mpcb->sched_ops->advance_window(meta_sk, subsk, skb);
+               else
+                       return 1;
+       }
+
+       return 1;
+}
+
 /* We are in or are becoming to be in infinite mapping mode */
 static inline bool mptcp_in_infinite_mapping_weak(const struct mptcp_cb *mpcb)
 {
@@ -1479,6 +1509,7 @@ static inline void mptcp_disable_static_key(void) {}
 static inline void mptcp_cookies_reqsk_init(struct request_sock *req,
 					    struct mptcp_options_received *mopt,
 					    struct sk_buff *skb) {}
+static inline void mptcp_set_ca_state(struct sock *sk, const u8 ca_state) {}
 static inline void mptcp_mpcb_put(struct mptcp_cb *mpcb) {}
 static inline void mptcp_fin(struct sock *meta_sk) {}
 static inline bool mptcp_can_new_subflow(const struct sock *meta_sk)

@@ -530,6 +530,10 @@ void tcp_retransmit_timer(struct sock *sk)
 		/* Retransmission failed because of local congestion,
 		 * do not backoff.
 		 */
+		mptcp_debug("%s %u: rto_times:%u\n",
+                                                       __func__,
+                                                       __LINE__,
+                                                       inet_csk(sk)->icsk_retransmits);
 		if (!icsk->icsk_retransmits)
 			icsk->icsk_retransmits = 1;
 		inet_csk_reset_xmit_timer(sk, ICSK_TIME_RETRANS,
@@ -556,6 +560,10 @@ void tcp_retransmit_timer(struct sock *sk)
 	icsk->icsk_backoff++;
 	icsk->icsk_retransmits++;
 
+	mptcp_debug("%s %u: rto_times:%u\n",
+                                               __func__,
+                                               __LINE__,
+                                               inet_csk(sk)->icsk_retransmits);
 out_reset_timer:
 	/* If stream is thin, use linear timeouts. Since 'icsk_backoff' is
 	 * used to reset timer, set to 0. Recalculate 'icsk_rto' as this
@@ -608,7 +616,7 @@ void tcp_write_timer_handler(struct sock *sk)
 		tcp_rack_reo_timeout(sk);
 		break;
 	case ICSK_TIME_LOSS_PROBE:
-		tcp_send_loss_probe(sk);
+		tcp_sk(sk)->ops->send_loss_probe(sk);
 		break;
 	case ICSK_TIME_RETRANS:
 		icsk->icsk_pending = 0;
