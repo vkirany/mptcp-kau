@@ -37,7 +37,7 @@ bool mptcp_is_def_unavailable(struct sock *sk)
 }
 EXPORT_SYMBOL_GPL(mptcp_is_def_unavailable);
 
-static bool mptcp_is_temp_unavailable(struct sock *sk,
+bool mptcp_is_temp_unavailable(struct sock *sk,
 				      const struct sk_buff *skb,
 				      bool zero_wnd_test)
 {
@@ -109,7 +109,7 @@ bool mptcp_is_available(struct sock *sk, const struct sk_buff *skb,
 EXPORT_SYMBOL_GPL(mptcp_is_available);
 
 /* Are we not allowed to reinject this skb on tp? */
-static int mptcp_dont_reinject_skb(const struct tcp_sock *tp, const struct sk_buff *skb)
+int mptcp_dont_reinject_skb(const struct tcp_sock *tp, const struct sk_buff *skb)
 {
 	/* If the skb has already been enqueued in this sk, try to find
 	 * another one.
