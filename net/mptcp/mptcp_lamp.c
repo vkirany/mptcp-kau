@@ -40,7 +40,7 @@ static void lamp_init(struct sock *sk)
 {
        struct lamp_priv *lpp = lamp_get_priv(tcp_sk(sk));
 
-       lpp->last_rbuf_opti = tcp_time_stamp;
+       lpp->last_rbuf_opti = tcp_jiffies32;
        lpp->schd_state = SS_NORMAL;
 }
 
@@ -49,7 +49,7 @@ static struct sk_buff *lamp_mptcp_rcv_buf_optimization(struct sock *sk, int pena
 {
        struct sock *meta_sk;
        const struct tcp_sock *tp = tcp_sk(sk);
-       struct tcp_sock *tp_it;
+       struct mptcp_tcp_sock *mptcp;
        struct sk_buff *skb_head;
        struct lamp_priv *llp = lamp_get_priv(tp);
 
@@ -71,12 +71,13 @@ static struct sk_buff *lamp_mptcp_rcv_buf_optimization(struct sock *sk, int pena
                goto retrans;
 
        /* Only penalize again after an RTT has elapsed */
-       if ((tcp_time_stamp - llp->last_rbuf_opti) < usecs_to_jiffies(tp->srtt_us >> 3))
+       if (tcp_jiffies32 - llp->last_rbuf_opti < usecs_to_jiffies(tp->srtt_us >> 3))
                goto retrans;
 
        /* Half the cwnd of the slow flow */
-       mptcp_for_each_tp(tp->mpcb, tp_it) {
-               if (tp_it != tp &&
+       mptcp_for_each_sub(tp->mpcb, mptcp) {
+                struct tcp_sock *tp_it = mptcp->tp;
+                if (tp_it != tp &&
                    TCP_SKB_CB(skb_head)->path_mask & mptcp_pi_to_flag(tp_it->mptcp->path_index)) {
                        if (tp->srtt_us < tp_it->srtt_us && inet_csk((struct sock *)tp_it)->icsk_ca_state == TCP_CA_Open) {
                                u32 prior_cwnd = tp_it->snd_cwnd;
@@ -87,7 +88,7 @@ static struct sk_buff *lamp_mptcp_rcv_buf_optimization(struct sock *sk, int pena
                                if (prior_cwnd >= tp_it->snd_ssthresh)
                                        tp_it->snd_ssthresh = max(tp_it->snd_ssthresh >> 1U, 2U);
 
-                               llp->last_rbuf_opti = tcp_time_stamp;
+                               llp->last_rbuf_opti = tcp_jiffies32;
                        }
                        break;
                }
@@ -98,7 +99,8 @@ retrans:
        /* Segment not yet injected into this path? Take it!!! */
        if (!(TCP_SKB_CB(skb_head)->path_mask & mptcp_pi_to_flag(tp->mptcp->path_index))) {
                bool do_retrans = false;
-               mptcp_for_each_tp(tp->mpcb, tp_it) {
+               mptcp_for_each_sub(tp->mpcb, mptcp) {
+                       struct tcp_sock *tp_it = mptcp->tp;
                        if (tp_it != tp &&
                            TCP_SKB_CB(skb_head)->path_mask & mptcp_pi_to_flag(tp_it->mptcp->path_index)) {
                                if (tp_it->snd_cwnd <= 4) {
@@ -164,9 +166,10 @@ static struct sock
        u32 transfe_time = 0xffffffff;
        bool found_unused = false;
        bool found_unused_una = false;
-       struct sock *sk;
+       struct mptcp_tcp_sock *mptcp;
 
-       mptcp_for_each_sk(mpcb, sk) {
+       mptcp_for_each_sub(mpcb, mptcp) {
+	       struct sock *sk = mptcp_to_sock(mptcp);
                struct tcp_sock *tp = tcp_sk(sk);
                bool unused = false;
 
@@ -253,21 +256,22 @@ struct sock *lamp_get_available_subflow(struct sock *meta_sk, struct sk_buff *sk
        struct mptcp_cb *mpcb = tcp_sk(meta_sk)->mpcb;
        struct sock *sk;
        bool force;
-       /*struct lamp_priv *lpp;*/
 
-       /* if there is only one subflow, bypass the scheduling function */
+       /** if there is only one subflow, bypass the scheduling function 
        if (mptcp_subflow_count(mpcb) == 1) {
                sk = (struct sock *)mpcb->conn_list;
                if (!mptcp_is_available(sk, skb, zero_wnd_test))
                        sk = NULL;
                lamp_seq_init(sk);
                return sk;
-       }
+       }*/
 
        /* Answer data_fin on same subflow!!! */
        if (meta_sk->sk_shutdown & RCV_SHUTDOWN &&
            skb && mptcp_is_data_fin(skb)) {
-               mptcp_for_each_sk(mpcb, sk) {
+	       struct mptcp_tcp_sock *mptcp;
+               mptcp_for_each_sub(mpcb, mptcp) {
+		       sk = mptcp_to_sock(mptcp);
                        if (tcp_sk(sk)->mptcp->path_index == mpcb->dfin_path_index &&
                            mptcp_is_available(sk, skb, zero_wnd_test)) {
                                lamp_seq_init(sk);
@@ -397,8 +401,10 @@ static bool lamp_all_rddt(struct sock *meta_sk, struct sock *subsk)
        struct sock *sk;
        struct lamp_priv *lpp;
        bool is_all_rddt = true;
+       struct mptcp_tcp_sock *mptcp;
 
-       mptcp_for_each_sk(mpcb, sk) {
+       mptcp_for_each_sub(mpcb, mptcp) {
+	       sk = mptcp_to_sock(mptcp);
                if (subflow_is_active((struct tcp_sock *)sk) && !mptcp_is_def_unavailable(sk)) {
                        lpp = lamp_get_priv(tcp_sk(sk));
 

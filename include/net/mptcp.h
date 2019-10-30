@@ -187,7 +187,7 @@ struct mptcp_tcp_sock {
 	u8	rem_id;
 	u8	sk_err;
 
-#define MPTCP_SCHED_SIZE 16
+#define MPTCP_SCHED_SIZE 64
 	u8	mptcp_sched[MPTCP_SCHED_SIZE] __aligned(8);
 
 	int	init_rcv_wnd;
