@@ -15,7 +15,7 @@ MODULE_PARM_DESC(thresh, "State shift threshold");
 
 
 struct lamp_priv {
-       u32     last_rbuf_opti;
+       u32 last_rbuf_opti;
        u32 loss1;
        u32 loss2;
        u32 loss_rate_inv;
@@ -53,7 +53,7 @@ static struct sk_buff *lamp_mptcp_rcv_buf_optimization(struct sock *sk, int pena
        struct sk_buff *skb_head;
        struct lamp_priv *llp = lamp_get_priv(tp);
 
-       if (tp->mpcb->cnt_subflows == 1)
+       if (mptcp_subflow_count(tp->mpcb) == 1)
                return NULL;
 
        meta_sk = mptcp_meta_sk(sk);
@@ -71,7 +71,7 @@ static struct sk_buff *lamp_mptcp_rcv_buf_optimization(struct sock *sk, int pena
                goto retrans;
 
        /* Only penalize again after an RTT has elapsed */
-       if (tcp_time_stamp - llp->last_rbuf_opti < usecs_to_jiffies(tp->srtt_us >> 3))
+       if ((tcp_time_stamp - llp->last_rbuf_opti) < usecs_to_jiffies(tp->srtt_us >> 3))
                goto retrans;
 
        /* Half the cwnd of the slow flow */
@@ -256,8 +256,8 @@ struct sock *lamp_get_available_subflow(struct sock *meta_sk, struct sk_buff *sk
        /*struct lamp_priv *lpp;*/
 
        /* if there is only one subflow, bypass the scheduling function */
-       if (mpcb->cnt_subflows == 1) {
-               sk = (struct sock *)mpcb->connection_list;
+       if (mptcp_subflow_count(mpcb) == 1) {
+               sk = (struct sock *)mpcb->conn_list;
                if (!mptcp_is_available(sk, skb, zero_wnd_test))
                        sk = NULL;
                lamp_seq_init(sk);
