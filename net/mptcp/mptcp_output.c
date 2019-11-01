@@ -1770,68 +1770,87 @@ void mptcp_sub_retransmit_timer(struct sock *sk)
 
 void mptcp_sub_send_loss_probe(struct sock *sk)
 {
- struct sock *meta_sk = mptcp_meta_sk(sk);
-        struct sk_buff *skb_tlp;
-        struct tcp_sock *tp = tcp_sk(sk);
-        struct sk_buff *skb_it, *tmp;
+	struct sock *meta_sk = mptcp_meta_sk(sk);
+	struct sk_buff *skb_tlp;
+	struct tcp_sock *tp = tcp_sk(sk);
+	struct sk_buff *skb_it, *tmp;
+	enum tcp_queue tcp_queue;
 
-        printk("Enter MPTCP Send_loss_probe");
-        /* START OF NEW TLP */
-        if (tcp_send_head(sk)) {
-                printk("Send first available packet");
-                skb_tlp = tcp_write_queue_head(sk);
-                __mptcp_reinject_data(skb_tlp, meta_sk, sk, 1, TCP_FRAG_IN_WRITE_QUEUE);
-        } else {
+	printk("Enter Send Loss Probe");
 
-                printk("Send all transmitted packets");
-                /*      skb_tlp = tcp_write_queue_tail(sk); */
-                     /* It has already been closed - there is really no point in reinjecting */
-                        if (meta_sk->sk_state == TCP_CLOSE)
-                                return;
+	if(tcp_send_head(sk)){
+		printk("Send first available packet");
+		skb_tlp = tcp_write_queue_head(sk);
+		__mptcp_reinject_data(skb_tlp, meta_sk, sk, 1,TCP_FRAG_IN_WRITE_QUEUE);
+	}else{
+		printk("Send all transmitted packets");
+		/* It has already been closed - there is really no point in reinjecting */
+		if( meta_sk->sk_state == TCP_CLOSE)
+			return;
+		skb_queue_walk_safe(&sk->sk_write_queue, skb_it, tmp){
+			struct tcp_skb_cb *tcb = TCP_SKB_CB(skb_it);
+			/* Break if skb_it is head as there are no outstanding segments */
+			if(skb_it==sk->sk_send_head)
+				break;
+			/* Subflow SYNs and FINs are not reinjected.
+			 * As well as empty subflow FINs with a data FIN.
+			 * They are reinjected below (without the subflow FIN flag
+			 */
+			if(tcb->tcp_flags & TCPHDR_SYN ||
+					(tcb->tcp_flags & TCPHDR_FIN && !mptcp_is_data_fin(skb_it)) ||
+					(tcb->tcp_flags & TCPHDR_FIN && mptcp_is_data_fin(skb_it) && !skb_it->len))
+					continue;
 
-                 skb_queue_walk_safe(&sk->sk_write_queue, skb_it, tmp) {
-                        struct tcp_skb_cb *tcb = TCP_SKB_CB(skb_it);
+			if(mptcp_is_reinjected(skb_it))
+				continue;
+			tcb->mptcp_flags |= MPTCP_REINJECT;
+			__mptcp_reinject_data(skb_it,meta_sk,sk,1,TCP_FRAG_IN_WRITE_QUEUE);
 
-                        /* Break if skb_it is head as there are no outstanding segments */
-                        if(skb_it==sk->sk_send_head)
-                            break;
+		}
+		skb_it = tcp_rtx_queue_head(sk);
+	        skb_rbtree_walk_from_safe(skb_it, tmp) {
+ 	              	struct tcp_skb_cb *tcb = TCP_SKB_CB(skb_it);
 
-                        /* Subflow syn's and fin's are not reinjected.
-                        *
-                        * As well as empty subflow-fins with a data-fin.
-                        * They are reinjected below (without the subflow-fin-flag)
-                        */
-                        if (tcb->tcp_flags & TCPHDR_SYN ||
- 				(tcb->tcp_flags & TCPHDR_FIN && !mptcp_is_data_fin(skb_it)) ||
-                                (tcb->tcp_flags & TCPHDR_FIN && mptcp_is_data_fin(skb_it) && !skb_it->len))
-                                continue;
+                	/* Subflow syn's and fin's are not reinjected.
+                 	*
+                 	* As well as empty subflow-fins with a data-fin.
+                 	* They are reinjected below (without the subflow-fin-flag)
+                 	*/
+                	if (tcb->tcp_flags & TCPHDR_SYN ||
+                    		(tcb->tcp_flags & TCPHDR_FIN && !mptcp_is_data_fin(skb_it)) ||
+                    		(tcb->tcp_flags & TCPHDR_FIN && mptcp_is_data_fin(skb_it) && !skb_it->len))
+                        	continue;
 
-                        if (mptcp_is_reinjected(skb_it))
-                                continue;
+                	if (mptcp_is_reinjected(skb_it))
+                        	continue;
 
-                        tcb->mptcp_flags |= MPTCP_REINJECT;
-                        __mptcp_reinject_data(skb_it, meta_sk, sk, 1, TCP_FRAG_IN_RTX_QUEUE);
-                }
+                	tcb->mptcp_flags |= MPTCP_REINJECT;
+                	__mptcp_reinject_data(skb_it, meta_sk, sk, 1, TCP_FRAG_IN_RTX_QUEUE);
+        	}
 
-                skb_it = tcp_write_queue_tail(meta_sk);
-                /* If sk has sent the empty data-fin, we have to reinject it too. */
-                if (skb_it && mptcp_is_data_fin(skb_it) && skb_it->len == 0 &&
-                        TCP_SKB_CB(skb_it)->path_mask & mptcp_pi_to_flag(tp->mptcp->path_index)) {
-                        __mptcp_reinject_data(skb_it, meta_sk, NULL, 1,TCP_FRAG_IN_RTX_QUEUE);
-                }
-        }
+        	skb_it = tcp_write_queue_tail(meta_sk);
+        	tcp_queue = TCP_FRAG_IN_WRITE_QUEUE;
 
-        tcp_send_loss_probe(sk);
-       /* Avoid using the same flow by treating as potential path failure for that flow */
-       tp->pf = 1;
-        mptcp_push_pending_frames(meta_sk);
-       tp->pf = 0;
-        /* END OF NEW TLP */
+        	if (!skb_it) {
+                	skb_it = skb_rb_last(&meta_sk->tcp_rtx_queue);
+             		tcp_queue = TCP_FRAG_IN_RTX_QUEUE;
+        	}
 
+        	/* If sk has sent the empty data-fin, we have to reinject it too. */
+        	if (skb_it && mptcp_is_data_fin(skb_it) && skb_it->len == 0 &&
+            		TCP_SKB_CB(skb_it)->path_mask & mptcp_pi_to_flag(tcp_sk(sk)->mptcp->path_index)) {
+                	__mptcp_reinject_data(skb_it, meta_sk, NULL, 1, tcp_queue);
+        	}
+
+	
+	}
+	tcp_send_loss_probe(sk);
+	/* Avoid using the same flow by treating as potential path failure for that flow */
+	tp->pf = 1;
+	mptcp_push_pending_frames(meta_sk);
+	tp->pf = 0;
 
 }
-
-
 
 /* Modify values to an mptcp-level for the initial window of new subflows */
 void mptcp_select_initial_window(const struct sock *sk, int __space, __u32 mss,
