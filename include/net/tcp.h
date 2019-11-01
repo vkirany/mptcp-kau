@@ -2054,6 +2054,7 @@ struct tcp_sock_ops {
 	void (*send_active_reset)(struct sock *sk, gfp_t priority);
 	int (*write_wakeup)(struct sock *sk, int mib);
 	void (*retransmit_timer)(struct sock *sk);
+	void (*send_loss_probe)(struct sock *sk);
 	void (*time_wait)(struct sock *sk, int state, int timeo);
 	void (*cleanup_rbuf)(struct sock *sk, int copied);
 	void (*cwnd_validate)(struct sock *sk, bool is_cwnd_limited);

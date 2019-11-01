@@ -415,6 +415,7 @@ const struct tcp_sock_ops tcp_specific = {
 	.send_active_reset		= tcp_send_active_reset,
 	.write_wakeup			= tcp_write_wakeup,
 	.retransmit_timer		= tcp_retransmit_timer,
+	.send_loss_probe		= tcp_send_loss_probe,
 	.time_wait			= tcp_time_wait,
 	.cleanup_rbuf			= tcp_cleanup_rbuf,
 	.cwnd_validate			= tcp_cwnd_validate,
