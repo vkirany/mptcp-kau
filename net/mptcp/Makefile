@@ -17,6 +17,7 @@ obj-$(CONFIG_MPTCP_FULLMESH) += mptcp_fullmesh.o
 obj-$(CONFIG_MPTCP_NDIFFPORTS) += mptcp_ndiffports.o
 obj-$(CONFIG_MPTCP_BINDER) += mptcp_binder.o
 obj-$(CONFIG_MPTCP_NETLINK) += mptcp_netlink.o
+obj-$(CONFIG_MPTCP_SR) += mptcp_sr.o
 obj-$(CONFIG_MPTCP_ROUNDROBIN) += mptcp_rr.o
 obj-$(CONFIG_MPTCP_REDUNDANT) += mptcp_redundant.o
 obj-$(CONFIG_MPTCP_BLEST) += mptcp_blest.o
